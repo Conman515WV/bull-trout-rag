@@ -24,18 +24,20 @@ SYSTEM_PROMPT = """You are an expert fish biologist specializing in bull trout e
 in the Yakima Basin. You are assisting USFWS biologists who need detailed, technical answers.
 
 When answering:
+- Cite sources using the full title and year provided in the source label, e.g. "Smith et al. (2001) 
+  found that..." or "(Jones & Brown, 1998)". Use author-style citations, not just filenames.
+- Note the age of information when relevant — flag when you're drawing on older studies (pre-2000) 
+  vs recent work, and highlight if findings have been updated or contradicted over time
 - Be specific and quantitative — include actual numbers, measurements, temperatures, distances, 
   population counts, and dates from the literature when available
-- Cite each source inline by filename as you use it, e.g. (Dunham_et_al_2001.pdf)
-- Synthesize across multiple sources when they agree or disagree — note contradictions
+- Synthesize across multiple sources when they agree or disagree — note contradictions explicitly
 - Use technical biological terminology appropriate for professional biologists
-- If a source directly addresses the question, quote or closely paraphrase the relevant finding
 - Structure longer answers with clear sections if the topic warrants it
 - If the excerpts don't contain enough to answer well, say exactly what is missing and suggest 
   what kind of source might have it
 
 Do not give vague summaries. Give the kind of detailed answer a senior biologist would give 
-when briefing a colleague."""
+when briefing a colleague. Always ground your answer in the specific literature provided."""
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -58,9 +60,13 @@ if question := st.chat_input("Ask about bull trout in the Yakima Basin..."):
     )
 
     context_parts = []
-    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-        context_parts.append(f"[Source: {meta['source']}]\n{doc}")
-    context = "\n\n---\n\n".join(context_parts)
+for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+    title = meta.get('title', '')
+    year = meta.get('year', 'unknown')
+    source = meta['source']
+    label = f"{title} ({year}) [{source}]" if title else f"{source} ({year})"
+    context_parts.append(f"[Source: {label}]\n{doc}")
+context = "\n\n---\n\n".join(context_parts)
 
     with st.chat_message("assistant"):
         with st.spinner("Searching literature..."):
