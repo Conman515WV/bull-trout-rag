@@ -60,13 +60,13 @@ if question := st.chat_input("Ask about bull trout in the Yakima Basin..."):
     )
 
     context_parts = []
-for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-    title = meta.get('title', '')
-    year = meta.get('year', 'unknown')
-    source = meta['source']
-    label = f"{title} ({year}) [{source}]" if title else f"{source} ({year})"
-    context_parts.append(f"[Source: {label}]\n{doc}")
-context = "\n\n---\n\n".join(context_parts)
+    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+        title = meta.get('title', '')
+        year = meta.get('year', 'unknown')
+        source = meta['source']
+        label = f"{title} ({year}) [{source}]" if title else f"{source} ({year})"
+        context_parts.append(f"[Source: {label}]\n{doc}")
+    context = "\n\n---\n\n".join(context_parts)
 
     with st.chat_message("assistant"):
         with st.spinner("Searching literature..."):
