@@ -344,7 +344,8 @@ with chat_tab:
             status.markdown("<div class='status-step'>⟳ Reranking results...</div>", unsafe_allow_html=True)
             pairs = [[question, doc] for doc in candidate_docs]
             scores = rerank_model.predict(pairs)
-            ranked = sorted(zip(scores.tolist(), candidate_docs, candidate_metas), reverse=True)
+            scores = [float(s) for s in scores]
+            ranked = sorted(zip(scores, candidate_docs, candidate_metas), key=lambda x: x[0], reverse=True)
             top = ranked[:30]
 
             status.markdown("<div class='status-step'>⟳ Generating answer...</div>", unsafe_allow_html=True)
