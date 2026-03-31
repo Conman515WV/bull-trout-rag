@@ -1,4 +1,4 @@
 chroma_db/** filter=lfs diff=lfs merge=lfs -text
+bm25_index.pkl filter=lfs diff=lfs merge=lfs -text
 chroma_db/** !text !filter !merge !diff
 bm25_index.pkl !text !filter !merge !diff
-bm25_index.pkl filter=lfs diff=lfs merge=lfs -text
