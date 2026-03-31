@@ -280,10 +280,34 @@ for i, message in enumerate(st.session_state.messages):
                         st.markdown(f"<span class='source-badge'>{s['year']}</span> **{s['title'][:70] or s['source']}**<br><span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>{s['source']}</span>", unsafe_allow_html=True)
                         st.markdown("---")
 
-# Web search toggle + chat input
-col1, col2 = st.columns([6, 1])
-with col2:
-    use_web = st.toggle("🌐 Web", value=False, help="Include live web search in addition to the literature database")
+# ── Fixed bottom bar with web toggle ────────────────────────────────────────
+st.markdown("""
+<style>
+div[data-testid="stBottom"] {
+    padding-bottom: 0.5rem;
+}
+.web-toggle-bar {
+    position: fixed;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 0.3rem 0.75rem;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.75rem;
+    color: #8b949e;
+}
+</style>
+""", unsafe_allow_html=True)
+
+with st.container():
+    use_web = st.toggle("🌐 Include web search", value=False, key="web_toggle")
 
 if question := st.chat_input("Ask about Yakima fisheries..."):
     st.session_state.messages.append({"role": "user", "content": question})
@@ -317,7 +341,7 @@ if question := st.chat_input("Ask about Yakima fisheries..."):
         scores = rerank_model.predict(pairs)
         scores = [float(s) for s in scores]
         ranked = sorted(zip(scores, candidate_docs, candidate_metas), key=lambda x: x[0], reverse=True)
-        top = ranked[:30]
+        top = ranked[:12]
 
         status.markdown("<div class='status-step'>⟳ Generating answer...</div>", unsafe_allow_html=True)
 
