@@ -1,25 +1,195 @@
 import streamlit as st
 from anthropic import Anthropic
 import chromadb
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
+import pickle
 
-st.set_page_config(page_title="Yakima Bull Trout Literature Bot", page_icon="🐟")
-password = st.text_input("Enter password to access the app:", type="password")
+st.set_page_config(
+    page_title="Yakima Bull Trout RAG",
+    page_icon="🐟",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background-color: #0d1117;
+    color: #e6edf3;
+}
+
+#MainMenu, footer, header {visibility: hidden;}
+.block-container {padding-top: 1.5rem; max-width: 1100px;}
+
+[data-testid="stSidebar"] {
+    background: #0d1117;
+    border-right: 1px solid #21262d;
+}
+[data-testid="stSidebar"] * {color: #e6edf3 !important;}
+
+.stTextInput input {
+    background: #161b22 !important;
+    border: 1px solid #30363d !important;
+    border-radius: 8px !important;
+    color: #e6edf3 !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+}
+
+[data-testid="stChatMessage"] {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+[data-testid="stChatInput"] {
+    background: #161b22 !important;
+    border: 1px solid #30363d !important;
+    border-radius: 12px !important;
+}
+[data-testid="stChatInput"] textarea {
+    color: #e6edf3 !important;
+    font-family: 'IBM Plex Sans', sans-serif !important;
+}
+
+[data-testid="stExpander"] {
+    background: #161b22 !important;
+    border: 1px solid #21262d !important;
+    border-radius: 8px !important;
+    margin-bottom: 0.4rem;
+}
+[data-testid="stExpander"] summary {
+    color: #58a6ff !important;
+    font-size: 0.85rem !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+}
+
+[data-testid="stTabs"] button {
+    font-family: 'IBM Plex Sans', sans-serif !important;
+    color: #8b949e !important;
+    border-bottom: 2px solid transparent !important;
+}
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: #3fb950 !important;
+    border-bottom: 2px solid #3fb950 !important;
+}
+
+[data-testid="stMetric"] {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+}
+[data-testid="stMetricLabel"] {color: #8b949e !important; font-size: 0.75rem !important;}
+[data-testid="stMetricValue"] {color: #3fb950 !important; font-size: 1.4rem !important; font-family: 'IBM Plex Mono', monospace !important;}
+
+[data-testid="stCheckbox"] label {color: #8b949e !important; font-size: 0.85rem !important;}
+
+.status-step {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    color: #3fb950;
+    padding: 0.25rem 0;
+}
+
+.app-header {
+    border-bottom: 1px solid #21262d;
+    padding-bottom: 1rem;
+    margin-bottom: 1.5rem;
+}
+.app-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: #e6edf3;
+    letter-spacing: -0.02em;
+}
+.app-subtitle {
+    font-size: 0.8rem;
+    color: #8b949e;
+    font-family: 'IBM Plex Mono', monospace;
+    margin-top: 0.2rem;
+}
+
+.source-badge {
+    display: inline-block;
+    background: #1f2937;
+    border: 1px solid #3fb95033;
+    color: #3fb950;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
+    margin: 0.15rem;
+}
+
+.conf-bar {
+    height: 4px;
+    background: #21262d;
+    border-radius: 2px;
+    margin-top: 0.5rem;
+}
+.conf-fill {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #3fb950, #58a6ff);
+}
+
+/* ── Mobile responsive ─────────────────────────────── */
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+        padding-top: 0.75rem !important;
+    }
+    .app-title {
+        font-size: 1.1rem;
+    }
+    .app-subtitle {
+        font-size: 0.7rem;
+    }
+    [data-testid="stChatMessage"] {
+        padding: 0.75rem;
+    }
+    .source-badge {
+        font-size: 0.65rem;
+    }
+    [data-testid="stExpander"] summary {
+        font-size: 0.78rem !important;
+    }
+    .status-step {
+        font-size: 0.72rem;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Password gate ───────────────────────────────────────────────────────────
+password = st.text_input("Access key:", type="password", placeholder="Enter password...")
 if password != "yakima2026":
     st.stop()
-st.title("🐟 Yakima Bull Trout Literature Bot")
-st.caption("Ask questions about the Yakima Basin bull trout literature library")
 
+# ── Load resources ──────────────────────────────────────────────────────────
 @st.cache_resource
 def load_resources():
     client = chromadb.PersistentClient(path="./chroma_db")
     collection = client.get_collection(name="yakima")
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    anthropic = Anthropic(api_key="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")
-    return collection, model, anthropic
+    embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+    rerank_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    anthropic = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    with open("./bm25_index.pkl", "rb") as f:
+        bm25_data = pickle.load(f)
+    return collection, embed_model, rerank_model, anthropic, bm25_data
 
-collection, model, anthropic = load_resources()
+collection, embed_model, rerank_model, anthropic, bm25_data = load_resources()
+bm25 = bm25_data["bm25"]
+bm25_texts = bm25_data["texts"]
+bm25_metadata = bm25_data["metadata"]
 
+# ── System prompt ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert fish biologist specializing in bull trout ecology and conservation 
 in the Yakima Basin. You are assisting USFWS biologists who need detailed, technical answers.
 
@@ -39,81 +209,217 @@ When answering:
 Do not give vague summaries. Give the kind of detailed answer a senior biologist would give 
 when briefing a colleague. Always ground your answer in the specific literature provided."""
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-use_web = st.sidebar.checkbox("🌐 Include web search", value=False)
-
-if question := st.chat_input("Ask about bull trout in the Yakima Basin..."):
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
-
-    question_embedding = model.encode(question)
-    results = collection.query(
-        query_embeddings=[question_embedding.tolist()],
-        n_results=30
+# ── Query expansion ─────────────────────────────────────────────────────────
+def expand_query(question, anthropic_client):
+    response = anthropic_client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{"role": "user", "content": f"""Generate 3 alternative search queries for this biology question to help find relevant scientific literature. 
+Return only the queries, one per line, no numbering or explanation.
+Question: {question}"""}]
     )
+    alternatives = response.content[0].text.strip().split('\n')
+    return [question] + [q.strip() for q in alternatives if q.strip()][:3]
 
-    context_parts = []
-    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-        title = meta.get('title', '')
-        year = meta.get('year', 'unknown')
-        source = meta['source']
-        label = f"{title} ({year}) [{source}]" if title else f"{source} ({year})"
-        context_parts.append(f"[Source: {label}]\n{doc}")
-    context = "\n\n---\n\n".join(context_parts)
+# ── Hybrid retrieval ────────────────────────────────────────────────────────
+def hybrid_retrieve(queries, collection, embed_model, bm25, bm25_texts, bm25_metadata, n_vector=25, n_bm25=25):
+    seen_ids = set()
+    candidate_docs = []
+    candidate_metas = []
 
-    with st.chat_message("assistant"):
-        with st.spinner("Searching literature..."):
+    for q in queries:
+        q_embedding = embed_model.encode(q)
+        results = collection.query(
+            query_embeddings=[q_embedding.tolist()],
+            n_results=n_vector,
+            include=["documents", "metadatas", "ids"]
+        )
+        for doc, meta, doc_id in zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["ids"][0]
+        ):
+            parent_text = meta.get("parent_text", doc)
+            parent_id = meta.get("parent_id", doc_id)
+            if parent_id not in seen_ids:
+                seen_ids.add(parent_id)
+                candidate_docs.append(parent_text)
+                candidate_metas.append(meta)
 
-            # Build tools list
+    tokens = queries[0].lower().split()
+    bm25_scores = bm25.get_scores(tokens)
+    top_bm25_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:n_bm25]
+
+    for idx in top_bm25_indices:
+        parent_id = bm25_metadata[idx]["parent_id"]
+        if parent_id not in seen_ids:
+            seen_ids.add(parent_id)
+            candidate_docs.append(bm25_texts[idx])
+            candidate_metas.append(bm25_metadata[idx])
+
+    return candidate_docs, candidate_metas
+
+# ── Sidebar ─────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    use_web = st.checkbox("Include web search", value=False)
+    st.markdown("---")
+    st.markdown("### 📊 Database")
+    st.markdown("<span style='color:#8b949e;font-size:0.8rem;font-family:IBM Plex Mono'>~310 papers indexed<br>Hybrid vector + BM25</span>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 💡 Tips")
+    st.markdown("<span style='color:#8b949e;font-size:0.8rem'>Ask specific questions about tributaries, temperature thresholds, population counts, or management actions for best results.</span>", unsafe_allow_html=True)
+
+# ── Header ──────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="app-header">
+    <div class="app-title">🐟 Yakima Bull Trout Literature</div>
+    <div class="app-subtitle">RAG · 310 papers · Hybrid Search · Yakima Basin USFWS</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Tabs ─────────────────────────────────────────────────────────────────────
+chat_tab, sources_tab = st.tabs(["💬 Chat", "📚 Sources"])
+
+with sources_tab:
+    st.markdown("### Indexed Papers")
+    st.markdown("<span style='color:#8b949e;font-size:0.85rem'>All papers currently in the vector database.</span>", unsafe_allow_html=True)
+    try:
+        sample = collection.get(include=["metadatas"], limit=2000)
+        seen = {}
+        for m in sample["metadatas"]:
+            src = m["source"]
+            if src not in seen:
+                seen[src] = {"title": m.get("title", ""), "year": m.get("year", "?")}
+        st.markdown(f"**{len(seen)} unique sources found in sample**")
+        for src, info in sorted(seen.items(), key=lambda x: x[1]["year"], reverse=True):
+            title = info["title"] or src
+            year = info["year"]
+            st.markdown(f"<span class='source-badge'>{year}</span> {title[:80]}", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Could not load sources: {e}")
+
+with chat_tab:
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "source_history" not in st.session_state:
+        st.session_state.source_history = []
+
+    for i, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if message["role"] == "assistant" and i // 2 < len(st.session_state.source_history):
+                sources = st.session_state.source_history[i // 2]
+                if sources:
+                    n = len(sources)
+                    conf = min(100, int((n / 30) * 100))
+                    st.markdown(f"""
+                    <div style='margin-top:1rem;'>
+                        <span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>
+                            {n} sources · confidence
+                        </span>
+                        <div class='conf-bar'><div class='conf-fill' style='width:{conf}%'></div></div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    with st.expander(f"📄 {n} sources used"):
+                        for s in sources:
+                            st.markdown(f"<span class='source-badge'>{s['year']}</span> **{s['title'][:70] or s['source']}**<br><span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>{s['source']}</span>", unsafe_allow_html=True)
+                            st.markdown("---")
+
+    if question := st.chat_input("Ask about bull trout in the Yakima Basin..."):
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        with st.chat_message("assistant"):
+            status = st.empty()
+
+            status.markdown("<div class='status-step'>⟳ Expanding query...</div>", unsafe_allow_html=True)
+            recent_history = st.session_state.messages[-4:]
+            conversation_context = ""
+            if len(recent_history) > 1:
+                conversation_context = "\n".join([
+                    f"{m['role'].upper()}: {m['content'][:300]}"
+                    for m in recent_history[:-1]
+                ])
+            contextual_question = question
+            if conversation_context:
+                contextual_question = f"Previous conversation:\n{conversation_context}\n\nCurrent question: {question}"
+            queries = expand_query(contextual_question, anthropic)
+
+            status.markdown("<div class='status-step'>⟳ Retrieving literature (vector + keyword)...</div>", unsafe_allow_html=True)
+            candidate_docs, candidate_metas = hybrid_retrieve(
+                queries, collection, embed_model,
+                bm25, bm25_texts, bm25_metadata
+            )
+
+            status.markdown("<div class='status-step'>⟳ Reranking results...</div>", unsafe_allow_html=True)
+            pairs = [[question, doc] for doc in candidate_docs]
+            scores = rerank_model.predict(pairs)
+            ranked = sorted(zip(scores, candidate_docs, candidate_metas), reverse=True)
+            top = ranked[:30]
+
+            status.markdown("<div class='status-step'>⟳ Generating answer...</div>", unsafe_allow_html=True)
+
+            context_parts = []
+            used_sources = []
+            for score, doc, meta in top:
+                title = meta.get('title', '')
+                year = meta.get('year', 'unknown')
+                source = meta['source']
+                label = f"{title} ({year}) [{source}]" if title else f"{source} ({year})"
+                context_parts.append(f"[Source: {label}]\n{doc}")
+                if not any(s['source'] == source for s in used_sources):
+                    used_sources.append({"source": source, "title": title, "year": year})
+            context = "\n\n---\n\n".join(context_parts)
+
+            claude_messages = []
+            for m in st.session_state.messages[:-1]:
+                claude_messages.append({"role": m["role"], "content": m["content"]})
+            claude_messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"Literature excerpts:\n\n{context}", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": f"Question: {question}"}
+                ]
+            })
+
             tools = []
             if use_web:
                 tools.append({"type": "web_search_20250305", "name": "web_search"})
 
-            # Build API call with caching
             api_kwargs = dict(
                 model="claude-sonnet-4-6",
-                max_tokens=4000,
-                system=[
-                    {
-                        "type": "text",
-                        "text": SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"}
-                    }
-                ],
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"Literature excerpts:\n\n{context}",
-                            "cache_control": {"type": "ephemeral"}
-                        },
-                        {
-                            "type": "text",
-                            "text": f"Question: {question}"
-                        }
-                    ]
-                }]
+                max_tokens=6000,
+                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                messages=claude_messages
             )
-
             if tools:
                 api_kwargs["tools"] = tools
 
             response = anthropic.messages.create(**api_kwargs)
-
-            # Extract text from response (web search returns multiple content blocks)
             answer = ""
             for block in response.content:
                 if hasattr(block, "text"):
                     answer += block.text
 
+            status.empty()
             st.markdown(answer)
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+            n = len(used_sources)
+            conf = min(100, int((n / 30) * 100))
+            st.markdown(f"""
+            <div style='margin-top:1rem;'>
+                <span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>
+                    {n} sources · confidence
+                </span>
+                <div class='conf-bar'><div class='conf-fill' style='width:{conf}%'></div></div>
+            </div>
+            """, unsafe_allow_html=True)
+            with st.expander(f"📄 {n} sources used"):
+                for s in used_sources:
+                    st.markdown(f"<span class='source-badge'>{s['year']}</span> **{s['title'][:70] or s['source']}**<br><span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>{s['source']}</span>", unsafe_allow_html=True)
+                    st.markdown("---")
+
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.session_state.source_history.append(used_sources)
