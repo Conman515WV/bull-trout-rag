@@ -216,10 +216,11 @@ def hybrid_retrieve(queries, collection, embed_model, bm25, bm25_texts, bm25_met
 
     for q in queries:
         q_embedding = embed_model.encode(q)
+        # ids are returned automatically, do not include in include list
         results = collection.query(
             query_embeddings=[q_embedding.tolist()],
             n_results=n_vector,
-            include=["documents", "metadatas", "ids"]
+            include=["documents", "metadatas"]
         )
         for doc, meta, doc_id in zip(
             results["documents"][0],
