@@ -6,149 +6,309 @@ import pickle
 
 st.set_page_config(
     page_title="Yakima Fisheries Literature",
-    page_icon="📖",
+    page_icon="🐟",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Global reset & dark base ───────────────────────────────────── */
+:root {
+    --bg-base:      #0f1117;
+    --bg-surface:   #1a1d27;
+    --bg-elevated:  #21242f;
+    --border:       #2d3142;
+    --border-light: #363b52;
+    --text-primary: #e8eaf0;
+    --text-secondary: #8b90a7;
+    --text-muted:   #565c7a;
+    --accent:       #5b8dee;
+    --accent-dim:   #5b8dee22;
+    --green:        #4ade80;
+    --green-dim:    #4ade8022;
+    --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+}
 
 html, body, [class*="css"] {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background-color: #0d1117;
-    color: #e6edf3;
+    font-family: var(--font-sans) !important;
+    background-color: var(--bg-base) !important;
+    color: var(--text-primary) !important;
 }
 
-#MainMenu, footer, header {visibility: hidden;}
-.block-container {padding-top: 1.5rem; max-width: 1100px;}
+/* Hide Streamlit chrome */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container {
+    padding-top: 1.25rem !important;
+    padding-bottom: 0.5rem !important;
+    max-width: 900px !important;
+}
 
+/* ── Sidebar ───────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
-    background: #0d1117;
-    border-right: 1px solid #21262d;
+    background: var(--bg-surface) !important;
+    border-right: 1px solid var(--border) !important;
 }
-[data-testid="stSidebar"] * {color: #e6edf3 !important;}
+[data-testid="stSidebar"] * { color: var(--text-primary) !important; }
+[data-testid="stSidebar"] hr {
+    border-color: var(--border) !important;
+    margin: 0.75rem 0 !important;
+}
+[data-testid="stSidebar"] h3 {
+    font-size: 0.7rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    color: var(--text-muted) !important;
+}
 
+/* ── Password input ────────────────────────────────────────────── */
 .stTextInput input {
-    background: #161b22 !important;
-    border: 1px solid #30363d !important;
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border) !important;
     border-radius: 8px !important;
-    color: #e6edf3 !important;
-    font-family: 'IBM Plex Mono', monospace !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-sans) !important;
+    font-size: 0.9rem !important;
+    padding: 0.6rem 0.85rem !important;
+    transition: border-color 0.15s ease;
+}
+.stTextInput input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-dim) !important;
 }
 
+/* ── Chat messages ─────────────────────────────────────────────── */
 [data-testid="stChatMessage"] {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 12px;
-    padding: 1rem;
-    margin-bottom: 0.75rem;
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 12px !important;
+    padding: 1rem 1.1rem !important;
+    margin-bottom: 0.6rem !important;
+}
+[data-testid="stChatMessage"] p {
+    color: var(--text-primary) !important;
+    line-height: 1.65 !important;
+    font-size: 0.9rem !important;
 }
 
+/* ── Chat input bar ────────────────────────────────────────────── */
 [data-testid="stChatInput"] {
-    background: #161b22 !important;
-    border: 1px solid #30363d !important;
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border-light) !important;
     border-radius: 12px !important;
+    transition: border-color 0.15s ease;
+}
+[data-testid="stChatInput"]:focus-within {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px var(--accent-dim) !important;
 }
 [data-testid="stChatInput"] textarea {
-    color: #e6edf3 !important;
-    font-family: 'IBM Plex Sans', sans-serif !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-sans) !important;
+    font-size: 0.9rem !important;
+    background: transparent !important;
+}
+[data-testid="stChatInput"] textarea::placeholder {
+    color: var(--text-muted) !important;
 }
 
+/* ── Bottom toolbar (web toggle row) ──────────────────────────── */
+.toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.6rem 0.35rem 0;
+    margin-bottom: 0.3rem;
+}
+/* Override Streamlit toggle to look compact in the toolbar */
+.toolbar-row [data-testid="stToggle"] {
+    background: transparent !important;
+}
+.toolbar-row [data-testid="stToggle"] label {
+    font-size: 0.78rem !important;
+    color: var(--text-secondary) !important;
+    font-family: var(--font-mono) !important;
+    cursor: pointer;
+}
+.toolbar-row [data-testid="stToggle"] label:hover {
+    color: var(--text-primary) !important;
+}
+
+/* ── Source expanders ──────────────────────────────────────────── */
 [data-testid="stExpander"] {
-    background: #161b22 !important;
-    border: 1px solid #21262d !important;
-    border-radius: 8px !important;
-    margin-bottom: 0.4rem;
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    margin-top: 0.5rem !important;
+    margin-bottom: 0 !important;
+    overflow: hidden;
 }
 [data-testid="stExpander"] summary {
-    color: #58a6ff !important;
-    font-size: 0.85rem !important;
-    font-family: 'IBM Plex Mono', monospace !important;
+    color: var(--accent) !important;
+    font-size: 0.8rem !important;
+    font-family: var(--font-mono) !important;
+    font-weight: 500 !important;
+    padding: 0.6rem 0.85rem !important;
+}
+[data-testid="stExpander"] summary:hover {
+    background: var(--bg-surface) !important;
 }
 
-[data-testid="stTabs"] button {
-    font-family: 'IBM Plex Sans', sans-serif !important;
-    color: #8b949e !important;
-    border-bottom: 2px solid transparent !important;
+/* ── Source cards inside expander ─────────────────────────────── */
+.source-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--border);
 }
-[data-testid="stTabs"] button[aria-selected="true"] {
-    color: #3fb950 !important;
-    border-bottom: 2px solid #3fb950 !important;
+.source-row:last-child { border-bottom: none; }
+.source-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 3.5rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 500;
+    padding: 0.15rem 0.45rem;
+    border-radius: 5px;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+}
+.source-title {
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+.source-file {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    margin-top: 0.15rem;
 }
 
-[data-testid="stMetric"] {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-}
-[data-testid="stMetricLabel"] {color: #8b949e !important; font-size: 0.75rem !important;}
-[data-testid="stMetricValue"] {color: #3fb950 !important; font-size: 1.4rem !important; font-family: 'IBM Plex Mono', monospace !important;}
-
-[data-testid="stCheckbox"] label {color: #8b949e !important; font-size: 0.85rem !important;}
-
+/* ── Status steps ──────────────────────────────────────────────── */
 .status-step {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.8rem;
-    color: #3fb950;
-    padding: 0.25rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    padding: 0.3rem 0;
+}
+.status-step::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1s ease-in-out infinite;
+    flex-shrink: 0;
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
 }
 
+/* ── App header ────────────────────────────────────────────────── */
 .app-header {
-    border-bottom: 1px solid #21262d;
-    padding-bottom: 1rem;
-    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding-bottom: 0.9rem;
+    margin-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
 }
 .app-title {
-    font-size: 1.4rem;
+    font-size: 1.15rem;
     font-weight: 600;
-    color: #e6edf3;
+    color: var(--text-primary);
     letter-spacing: -0.02em;
 }
-.app-subtitle {
-    font-size: 0.8rem;
-    color: #8b949e;
-    font-family: 'IBM Plex Mono', monospace;
-    margin-top: 0.2rem;
+.app-badge {
+    font-size: 0.68rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    padding: 0.15rem 0.55rem;
+    border-radius: 20px;
 }
 
-.source-badge {
-    display: inline-block;
-    background: #1f2937;
-    border: 1px solid #3fb95033;
-    color: #3fb950;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.7rem;
-    padding: 0.1rem 0.5rem;
-    border-radius: 4px;
-    margin: 0.15rem;
+/* ── Metrics ───────────────────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+}
+[data-testid="stMetricLabel"] {
+    color: var(--text-muted) !important;
+    font-size: 0.72rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+[data-testid="stMetricValue"] {
+    color: var(--text-primary) !important;
+    font-size: 1.35rem !important;
+    font-family: var(--font-mono) !important;
 }
 
-.conf-bar {
-    height: 4px;
-    background: #21262d;
-    border-radius: 2px;
-    margin-top: 0.5rem;
+/* ── Tabs ──────────────────────────────────────────────────────── */
+[data-testid="stTabs"] button {
+    font-family: var(--font-sans) !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.85rem !important;
 }
-.conf-fill {
-    height: 4px;
-    border-radius: 2px;
-    background: linear-gradient(90deg, #3fb950, #58a6ff);
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: var(--accent) !important;
+    border-bottom-color: var(--accent) !important;
 }
 
+/* ── Hide sidebar entirely ─────────────────────────────────────── */
+[data-testid="stSidebar"] { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
+.block-container { max-width: 820px !important; }
+
+/* ── Footer ────────────────────────────────────────────────────── */
+.app-footer {
+    margin-top: 2.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    letter-spacing: 0.03em;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Responsive ────────────────────────────────────────────────── */
 @media (max-width: 768px) {
     .block-container {
         padding-left: 0.75rem !important;
         padding-right: 0.75rem !important;
         padding-top: 0.75rem !important;
     }
-    .app-title { font-size: 1.1rem; }
-    .app-subtitle { font-size: 0.7rem; }
-    [data-testid="stChatMessage"] { padding: 0.75rem; }
-    .source-badge { font-size: 0.65rem; }
-    [data-testid="stExpander"] summary { font-size: 0.78rem !important; }
+    .app-title { font-size: 1rem; }
+    [data-testid="stChatMessage"] { padding: 0.75rem 0.85rem !important; }
+    .source-badge { font-size: 0.62rem; min-width: 3rem; }
     .status-step { font-size: 0.72rem; }
 }
 </style>
@@ -247,18 +407,11 @@ def hybrid_retrieve(queries, collection, embed_model, bm25, bm25_texts, bm25_met
 
     return candidate_docs, candidate_metas
 
-# ── Sidebar ─────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("### 💡 Tips")
-    st.markdown("<span style='color:#8b949e;font-size:0.8rem'>Ask specific questions about tributaries, temperature thresholds, population counts, or management actions for best results.</span>", unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("### 📊 Database")
-    st.markdown("<span style='color:#8b949e;font-size:0.8rem;font-family:IBM Plex Mono'>~310 papers indexed<br>Hybrid vector + BM25</span>", unsafe_allow_html=True)
-
 # ── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-header">
-    <div class="app-title">Yakima Fisheries Literature</div>
+    <div class="app-title">🐟 Yakima Fisheries Literature</div>
+    <div class="app-badge">Bull Trout RAG</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -275,39 +428,23 @@ for i, message in enumerate(st.session_state.messages):
             sources = st.session_state.source_history[i // 2]
             if sources:
                 n = len(sources)
-                with st.expander(f"📄 {n} sources used"):
+                with st.expander(f"📄 {n} source{'s' if n != 1 else ''} retrieved"):
                     for s in sources:
-                        st.markdown(f"<span class='source-badge'>{s['year']}</span> **{s['title'][:70] or s['source']}**<br><span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>{s['source']}</span>", unsafe_allow_html=True)
-                        st.markdown("---")
+                        title = (s['title'][:80] + '…') if len(s['title']) > 80 else s['title']
+                        display = title or s['source']
+                        st.markdown(
+                            f"<div class='source-row'>"
+                            f"<span class='source-badge'>{s['year'] or '—'}</span>"
+                            f"<div><div class='source-title'>{display}</div>"
+                            f"<div class='source-file'>{s['source']}</div></div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
 
-# ── Fixed bottom bar with web toggle ────────────────────────────────────────
-st.markdown("""
-<style>
-div[data-testid="stBottom"] {
-    padding-bottom: 0.5rem;
-}
-.web-toggle-bar {
-    position: fixed;
-    bottom: 70px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 999;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 0.3rem 0.75rem;
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 0.75rem;
-    color: #8b949e;
-}
-</style>
-""", unsafe_allow_html=True)
-
-with st.container():
-    use_web = st.toggle("🌐 Include web search", value=False, key="web_toggle")
+# ── Web search toggle (rendered in Streamlit's bottom bar) ──────────────────
+st.markdown("<div class='toolbar-row'>", unsafe_allow_html=True)
+use_web = st.toggle("🌐 Include web search", value=False, key="web_toggle")
+st.markdown("</div>", unsafe_allow_html=True)
 
 if question := st.chat_input("Ask about Yakima fisheries..."):
     st.session_state.messages.append({"role": "user", "content": question})
@@ -317,7 +454,7 @@ if question := st.chat_input("Ask about Yakima fisheries..."):
     with st.chat_message("assistant"):
         status = st.empty()
 
-        status.markdown("<div class='status-step'>⟳ Expanding query...</div>", unsafe_allow_html=True)
+        status.markdown("<div class='status-step'>Expanding query…</div>", unsafe_allow_html=True)
         recent_history = st.session_state.messages[-4:]
         conversation_context = ""
         if len(recent_history) > 1:
@@ -330,20 +467,20 @@ if question := st.chat_input("Ask about Yakima fisheries..."):
             contextual_question = f"Previous conversation:\n{conversation_context}\n\nCurrent question: {question}"
         queries = expand_query(contextual_question, anthropic)
 
-        status.markdown("<div class='status-step'>⟳ Retrieving literature (vector + keyword)...</div>", unsafe_allow_html=True)
+        status.markdown("<div class='status-step'>Retrieving literature (vector + keyword)…</div>", unsafe_allow_html=True)
         candidate_docs, candidate_metas = hybrid_retrieve(
             queries, collection, embed_model,
             bm25, bm25_texts, bm25_metadata
         )
 
-        status.markdown("<div class='status-step'>⟳ Reranking results...</div>", unsafe_allow_html=True)
+        status.markdown("<div class='status-step'>Reranking results…</div>", unsafe_allow_html=True)
         pairs = [[question, doc] for doc in candidate_docs]
         scores = rerank_model.predict(pairs)
         scores = [float(s) for s in scores]
         ranked = sorted(zip(scores, candidate_docs, candidate_metas), key=lambda x: x[0], reverse=True)
         top = ranked[:12]
 
-        status.markdown("<div class='status-step'>⟳ Generating answer...</div>", unsafe_allow_html=True)
+        status.markdown("<div class='status-step'>Generating answer…</div>", unsafe_allow_html=True)
 
         context_parts = []
         used_sources = []
@@ -391,10 +528,25 @@ if question := st.chat_input("Ask about Yakima fisheries..."):
         st.markdown(answer)
 
         n = len(used_sources)
-        with st.expander(f"📄 {n} sources used"):
+        with st.expander(f"📄 {n} source{'s' if n != 1 else ''} retrieved"):
             for s in used_sources:
-                st.markdown(f"<span class='source-badge'>{s['year']}</span> **{s['title'][:70] or s['source']}**<br><span style='color:#8b949e;font-size:0.75rem;font-family:IBM Plex Mono'>{s['source']}</span>", unsafe_allow_html=True)
-                st.markdown("---")
+                title = (s['title'][:80] + '…') if len(s['title']) > 80 else s['title']
+                display = title or s['source']
+                st.markdown(
+                    f"<div class='source-row'>"
+                    f"<span class='source-badge'>{s['year'] or '—'}</span>"
+                    f"<div><div class='source-title'>{display}</div>"
+                    f"<div class='source-file'>{s['source']}</div></div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.source_history.append(used_sources)
+
+# ── Footer ───────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="app-footer">
+    Created by Connor Cunningham · 2026
+</div>
+""", unsafe_allow_html=True)
