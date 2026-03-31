@@ -138,31 +138,18 @@ html, body, [class*="css"] {
     background: linear-gradient(90deg, #3fb950, #58a6ff);
 }
 
-/* ── Mobile responsive ─────────────────────────────── */
 @media (max-width: 768px) {
     .block-container {
         padding-left: 0.75rem !important;
         padding-right: 0.75rem !important;
         padding-top: 0.75rem !important;
     }
-    .app-title {
-        font-size: 1.1rem;
-    }
-    .app-subtitle {
-        font-size: 0.7rem;
-    }
-    [data-testid="stChatMessage"] {
-        padding: 0.75rem;
-    }
-    .source-badge {
-        font-size: 0.65rem;
-    }
-    [data-testid="stExpander"] summary {
-        font-size: 0.78rem !important;
-    }
-    .status-step {
-        font-size: 0.72rem;
-    }
+    .app-title { font-size: 1.1rem; }
+    .app-subtitle { font-size: 0.7rem; }
+    [data-testid="stChatMessage"] { padding: 0.75rem; }
+    .source-badge { font-size: 0.65rem; }
+    [data-testid="stExpander"] summary { font-size: 0.78rem !important; }
+    .status-step { font-size: 0.72rem; }
 }
 </style>
 """, unsafe_allow_html=True)
