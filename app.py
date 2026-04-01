@@ -6,310 +6,274 @@ import pickle
 
 st.set_page_config(
     page_title="Yakima Fisheries Literature",
-    page_icon="🐟",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="📖",
+    layout="centered",
+    initial_sidebar_state="collapsed"
 )
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
 
-/* ── Global reset & dark base ───────────────────────────────────── */
+/* ── Design tokens ─────────────────────────────────────────────── */
 :root {
-    --bg-base:      #0f1117;
-    --bg-surface:   #1a1d27;
-    --bg-elevated:  #21242f;
-    --border:       #2d3142;
-    --border-light: #363b52;
-    --text-primary: #e8eaf0;
-    --text-secondary: #8b90a7;
-    --text-muted:   #565c7a;
-    --accent:       #5b8dee;
-    --accent-dim:   #5b8dee22;
-    --green:        #4ade80;
-    --green-dim:    #4ade8022;
-    --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+    --bg:           #212121;
+    --bg-input:     #2f2f2f;
+    --bg-user:      #2f2f2f;
+    --bg-chip:      #383838;
+    --bg-chip-on:   #4a4a4a;
+    --border:       #3a3a3a;
+    --text:         #ececec;
+    --text-sub:     #9b9b9b;
+    --text-muted:   #686868;
+    --accent:       #10a37f;
+    --font:         'Inter', -apple-system, BlinkMacSystemFont, ui-sans-serif, sans-serif;
 }
 
+/* ── Base ──────────────────────────────────────────────────────── */
 html, body, [class*="css"] {
-    font-family: var(--font-sans) !important;
-    background-color: var(--bg-base) !important;
-    color: var(--text-primary) !important;
+    font-family: var(--font) !important;
+    background-color: var(--bg) !important;
+    color: var(--text) !important;
 }
-
-/* Hide Streamlit chrome */
 #MainMenu, footer, header { visibility: hidden; }
+[data-testid="stSidebar"]       { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
 .block-container {
-    padding-top: 1.25rem !important;
-    padding-bottom: 0.5rem !important;
-    max-width: 900px !important;
+    max-width: 760px !important;
+    padding-top: 2.5rem !important;
+    padding-bottom: 1rem !important;
 }
 
-/* ── Sidebar ───────────────────────────────────────────────────── */
-[data-testid="stSidebar"] {
-    background: var(--bg-surface) !important;
-    border-right: 1px solid var(--border) !important;
+/* ── Password screen ───────────────────────────────────────────── */
+.stTextInput > label {
+    font-size: 0.8rem !important;
+    color: var(--text-sub) !important;
+    font-weight: 400 !important;
+    margin-bottom: 0.35rem !important;
 }
-[data-testid="stSidebar"] * { color: var(--text-primary) !important; }
-[data-testid="stSidebar"] hr {
-    border-color: var(--border) !important;
-    margin: 0.75rem 0 !important;
-}
-[data-testid="stSidebar"] h3 {
-    font-size: 0.7rem !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.08em !important;
-    text-transform: uppercase !important;
-    color: var(--text-muted) !important;
-}
-
-/* ── Password input ────────────────────────────────────────────── */
 .stTextInput input {
-    background: var(--bg-surface) !important;
+    background: var(--bg-input) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    color: var(--text-primary) !important;
-    font-family: var(--font-sans) !important;
-    font-size: 0.9rem !important;
-    padding: 0.6rem 0.85rem !important;
-    transition: border-color 0.15s ease;
+    border-radius: 12px !important;
+    color: var(--text) !important;
+    font-family: var(--font) !important;
+    font-size: 0.95rem !important;
+    padding: 0.7rem 1rem !important;
+    transition: border-color 0.15s;
+    outline: none !important;
+    box-shadow: none !important;
 }
 .stTextInput input:focus {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 3px var(--accent-dim) !important;
+    border-color: #555 !important;
+    box-shadow: none !important;
 }
 
 /* ── Chat messages ─────────────────────────────────────────────── */
+/* No borders, no boxes — flat like Claude/ChatGPT */
 [data-testid="stChatMessage"] {
-    background: var(--bg-surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    padding: 1rem 1.1rem !important;
-    margin-bottom: 0.6rem !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0.25rem 0 !important;
+    margin-bottom: 0 !important;
+    gap: 0.85rem !important;
 }
-[data-testid="stChatMessage"] p {
-    color: var(--text-primary) !important;
-    line-height: 1.65 !important;
-    font-size: 0.9rem !important;
+/* User bubble gets a pill background */
+[data-testid="stChatMessage"][data-testid*="user"],
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    background: transparent !important;
+}
+[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-user"] + div,
+[data-testid="stChatMessage"][aria-label*="user"] .stMarkdown {
+    background: var(--bg-user) !important;
+    border-radius: 18px !important;
+    padding: 0.65rem 1rem !important;
+    display: inline-block;
+    max-width: 85%;
+}
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessage"] td {
+    color: var(--text) !important;
+    font-size: 0.95rem !important;
+    line-height: 1.7 !important;
+}
+[data-testid="stChatMessage"] h1,
+[data-testid="stChatMessage"] h2,
+[data-testid="stChatMessage"] h3 {
+    color: var(--text) !important;
+    margin-top: 1.1rem !important;
+}
+/* Avatar icons */
+[data-testid="chatAvatarIcon-user"],
+[data-testid="chatAvatarIcon-assistant"] {
+    background: var(--bg-chip) !important;
+    border-radius: 50% !important;
+    width: 30px !important;
+    height: 30px !important;
+    font-size: 0.8rem !important;
+    flex-shrink: 0 !important;
 }
 
-/* ── Chat input bar ────────────────────────────────────────────── */
+/* ── Chat input ────────────────────────────────────────────────── */
+[data-testid="stBottom"] {
+    background: var(--bg) !important;
+    padding-bottom: 0.5rem !important;
+}
 [data-testid="stChatInput"] {
-    background: var(--bg-elevated) !important;
-    border: 1px solid var(--border-light) !important;
-    border-radius: 12px !important;
-    transition: border-color 0.15s ease;
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 16px !important;
+    box-shadow: none !important;
+    transition: border-color 0.15s;
 }
 [data-testid="stChatInput"]:focus-within {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 3px var(--accent-dim) !important;
+    border-color: #555 !important;
+    box-shadow: none !important;
 }
 [data-testid="stChatInput"] textarea {
-    color: var(--text-primary) !important;
-    font-family: var(--font-sans) !important;
-    font-size: 0.9rem !important;
+    color: var(--text) !important;
+    font-family: var(--font) !important;
+    font-size: 0.95rem !important;
     background: transparent !important;
+    padding: 0.75rem 1rem !important;
 }
 [data-testid="stChatInput"] textarea::placeholder {
     color: var(--text-muted) !important;
 }
+[data-testid="stChatInput"] button {
+    background: var(--text) !important;
+    border-radius: 8px !important;
+    color: var(--bg) !important;
+}
 
-/* ── Bottom toolbar (web toggle row) ──────────────────────────── */
-.toolbar-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.35rem 0.6rem 0.35rem 0;
-    margin-bottom: 0.3rem;
+/* ── Web toggle chip ───────────────────────────────────────────── */
+/* Sits just above the input bar */
+div[data-testid="stToggle"] {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 0.4rem !important;
+    margin-bottom: 0.4rem !important;
 }
-/* Override Streamlit toggle to look compact in the toolbar */
-.toolbar-row [data-testid="stToggle"] {
-    background: transparent !important;
-}
-.toolbar-row [data-testid="stToggle"] label {
+div[data-testid="stToggle"] label {
     font-size: 0.78rem !important;
-    color: var(--text-secondary) !important;
-    font-family: var(--font-mono) !important;
-    cursor: pointer;
+    color: var(--text-sub) !important;
+    font-weight: 400 !important;
+    cursor: pointer !important;
 }
-.toolbar-row [data-testid="stToggle"] label:hover {
-    color: var(--text-primary) !important;
+div[data-testid="stToggle"] label:hover {
+    color: var(--text) !important;
+}
+/* Style the toggle track */
+div[data-testid="stToggle"] span[data-baseweb="checkbox"] {
+    background: var(--bg-chip) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 99px !important;
 }
 
-/* ── Source expanders ──────────────────────────────────────────── */
+/* ── Source expander ───────────────────────────────────────────── */
 [data-testid="stExpander"] {
-    background: var(--bg-elevated) !important;
+    background: transparent !important;
     border: 1px solid var(--border) !important;
     border-radius: 10px !important;
-    margin-top: 0.5rem !important;
-    margin-bottom: 0 !important;
-    overflow: hidden;
+    margin-top: 0.6rem !important;
 }
 [data-testid="stExpander"] summary {
-    color: var(--accent) !important;
-    font-size: 0.8rem !important;
-    font-family: var(--font-mono) !important;
-    font-weight: 500 !important;
-    padding: 0.6rem 0.85rem !important;
+    color: var(--text-sub) !important;
+    font-size: 0.78rem !important;
+    font-weight: 400 !important;
+    padding: 0.5rem 0.85rem !important;
 }
 [data-testid="stExpander"] summary:hover {
-    background: var(--bg-surface) !important;
+    color: var(--text) !important;
+    background: transparent !important;
 }
+[data-testid="stExpander"] svg { color: var(--text-muted) !important; }
 
-/* ── Source cards inside expander ─────────────────────────────── */
+/* ── Source rows ───────────────────────────────────────────────── */
 .source-row {
     display: flex;
     align-items: flex-start;
-    gap: 0.65rem;
-    padding: 0.55rem 0;
+    gap: 0.7rem;
+    padding: 0.5rem 0;
     border-bottom: 1px solid var(--border);
 }
 .source-row:last-child { border-bottom: none; }
 .source-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 3.5rem;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-light);
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: 0.68rem;
+    font-size: 0.65rem;
     font-weight: 500;
+    color: var(--text-sub);
+    background: var(--bg-chip);
+    border-radius: 4px;
     padding: 0.15rem 0.45rem;
-    border-radius: 5px;
+    white-space: nowrap;
     flex-shrink: 0;
-    margin-top: 0.1rem;
+    margin-top: 0.15rem;
 }
 .source-title {
     font-size: 0.82rem;
-    font-weight: 500;
-    color: var(--text-primary);
-    line-height: 1.4;
+    color: var(--text);
+    line-height: 1.45;
 }
 .source-file {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
-    font-family: var(--font-mono);
-    margin-top: 0.15rem;
+    margin-top: 0.1rem;
 }
 
-/* ── Status steps ──────────────────────────────────────────────── */
+/* ── Status indicator ──────────────────────────────────────────── */
 .status-step {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    color: var(--text-secondary);
-    padding: 0.3rem 0;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-sub);
+    padding: 0.2rem 0;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 .status-step::before {
     content: '';
-    display: inline-block;
-    width: 6px;
-    height: 6px;
+    width: 12px; height: 12px;
+    border: 1.5px solid var(--border);
+    border-top-color: var(--text-sub);
     border-radius: 50%;
-    background: var(--accent);
-    animation: pulse 1s ease-in-out infinite;
+    animation: spin 0.8s linear infinite;
     flex-shrink: 0;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
 }
 
 /* ── App header ────────────────────────────────────────────────── */
 .app-header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    padding-bottom: 0.9rem;
-    margin-bottom: 1.25rem;
-    border-bottom: 1px solid var(--border);
+    text-align: center;
+    margin-bottom: 2rem;
 }
 .app-title {
-    font-size: 1.15rem;
+    font-size: 1.1rem;
     font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: -0.02em;
+    color: var(--text);
+    letter-spacing: -0.01em;
 }
-.app-badge {
-    font-size: 0.68rem;
-    font-family: var(--font-mono);
-    color: var(--text-muted);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    padding: 0.15rem 0.55rem;
-    border-radius: 20px;
-}
-
-/* ── Metrics ───────────────────────────────────────────────────── */
-[data-testid="stMetric"] {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-}
-[data-testid="stMetricLabel"] {
-    color: var(--text-muted) !important;
-    font-size: 0.72rem !important;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-[data-testid="stMetricValue"] {
-    color: var(--text-primary) !important;
-    font-size: 1.35rem !important;
-    font-family: var(--font-mono) !important;
-}
-
-/* ── Tabs ──────────────────────────────────────────────────────── */
-[data-testid="stTabs"] button {
-    font-family: var(--font-sans) !important;
-    color: var(--text-secondary) !important;
-    font-size: 0.85rem !important;
-}
-[data-testid="stTabs"] button[aria-selected="true"] {
-    color: var(--accent) !important;
-    border-bottom-color: var(--accent) !important;
-}
-
-/* ── Hide sidebar entirely ─────────────────────────────────────── */
-[data-testid="stSidebar"] { display: none !important; }
-[data-testid="collapsedControl"] { display: none !important; }
-.block-container { max-width: 820px !important; }
 
 /* ── Footer ────────────────────────────────────────────────────── */
 .app-footer {
-    margin-top: 2.5rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
     text-align: center;
-    font-size: 0.72rem;
-    font-family: var(--font-mono);
+    font-size: 0.7rem;
     color: var(--text-muted);
-    letter-spacing: 0.03em;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
 }
 
 /* ── Scrollbar ─────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* ── Responsive ────────────────────────────────────────────────── */
+/* ── Mobile ────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
-    .block-container {
-        padding-left: 0.75rem !important;
-        padding-right: 0.75rem !important;
-        padding-top: 0.75rem !important;
-    }
+    .block-container { padding-top: 1rem !important; }
     .app-title { font-size: 1rem; }
-    [data-testid="stChatMessage"] { padding: 0.75rem 0.85rem !important; }
-    .source-badge { font-size: 0.62rem; min-width: 3rem; }
-    .status-step { font-size: 0.72rem; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -410,8 +374,7 @@ def hybrid_retrieve(queries, collection, embed_model, bm25, bm25_texts, bm25_met
 # ── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-header">
-    <div class="app-title">🐟 Yakima Fisheries Literature</div>
-    <div class="app-badge">Bull Trout RAG</div>
+    <div class="app-title">Yakima Fisheries Literature</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -441,10 +404,9 @@ for i, message in enumerate(st.session_state.messages):
                             unsafe_allow_html=True
                         )
 
-# ── Web search toggle (rendered in Streamlit's bottom bar) ──────────────────
-st.markdown("<div class='toolbar-row'>", unsafe_allow_html=True)
-use_web = st.toggle("🌐 Include web search", value=False, key="web_toggle")
-st.markdown("</div>", unsafe_allow_html=True)
+# ── Bottom input area ────────────────────────────────────────────────────────
+with st.container():
+    use_web = st.toggle("Search the web", value=False, key="web_toggle")
 
 if question := st.chat_input("Ask about Yakima fisheries..."):
     st.session_state.messages.append({"role": "user", "content": question})
