@@ -494,7 +494,11 @@ def load_resources():
     collection = client.get_collection(name="yakima")
     embed_model = SentenceTransformer('all-MiniLM-L6-v2')
     rerank_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-    anthropic = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    api_key = st.secrets.get("ANTHROPIC_API_KEY") if hasattr(st, "secrets") else None
+    if not api_key:
+        import os
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    anthropic = Anthropic(api_key=api_key)
     with open("./bm25_index.pkl", "rb") as f:
         bm25_data = pickle.load(f)
     return collection, embed_model, rerank_model, anthropic, bm25_data
