@@ -222,8 +222,13 @@ html, body, [class*="css"] {
 /* ── Bottom bar ────────────────────────────────────────────────── */
 [data-testid="stBottom"] {
     background: linear-gradient(to top, var(--bg) 80%, transparent) !important;
-    padding-bottom: 1rem !important;
-    padding-top: 0.75rem !important;
+    padding-bottom: 0.5rem !important;
+    padding-top: 0.5rem !important;
+}
+[data-testid="stBottom"] > div {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0 !important;
 }
 [data-testid="stChatInput"] {
     background: var(--bg-input) !important;
@@ -257,13 +262,31 @@ html, body, [class*="css"] {
     opacity: 0.85 !important;
 }
 
+/* ── Bottom row: toggle left, footer center ────────────────────── */
+.bottom-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.3rem 0.25rem 0.1rem;
+}
+.bottom-row-center {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 /* ── Web search toggle ─────────────────────────────────────────── */
 div[data-testid="stToggle"] {
     display: inline-flex !important;
     align-items: center !important;
     gap: 0.5rem !important;
-    margin: 0.35rem 0 0.5rem 0.1rem !important;
-    padding: 0.3rem 0.65rem 0.3rem 0.5rem !important;
+    margin: 0 !important;
+    padding: 0.25rem 0.65rem 0.25rem 0.5rem !important;
     background: var(--bg-chip) !important;
     border: 1px solid var(--border) !important;
     border-radius: 99px !important;
@@ -283,7 +306,6 @@ div[data-testid="stToggle"] label {
     letter-spacing: 0.01em !important;
 }
 div[data-testid="stToggle"] label:hover { color: var(--text) !important; }
-/* Toggle track itself */
 div[data-testid="stToggle"] [data-baseweb="toggle"] {
     transform: scale(0.85) !important;
 }
@@ -429,13 +451,14 @@ div[data-testid="stToggle"] [data-baseweb="toggle"] {
     color: var(--text);
 }
 
-/* ── Footer ────────────────────────────────────────────────────── */
-.app-footer {
-    text-align: center;
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    padding: 0.75rem 0 0.25rem;
-    letter-spacing: 0.01em;
+/* ── Column gutters in bottom row ──────────────────────────────── */
+[data-testid="stBottom"] [data-testid="stHorizontalBlock"] {
+    gap: 0 !important;
+    padding: 0 !important;
+    align-items: center !important;
+}
+[data-testid="stBottom"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0 !important;
 }
 
 /* ── Scrollbar ─────────────────────────────────────────────────── */
@@ -706,11 +729,12 @@ if question := st.chat_input("Ask about Yakima fisheries…"):
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.source_history.append(used_sources)
 
-# ── Web search toggle + footer ────────────────────────────────────────────────
-st.session_state.use_web = st.toggle("Web search", value=st.session_state.use_web, key="web_toggle")
-
-st.markdown("""
-<div class="app-footer">
+# ── Web search toggle + footer (renders inside stBottom, below chat input) ────
+col_toggle, col_footer = st.columns([1, 1])
+with col_toggle:
+    st.session_state.use_web = st.toggle("Web search", value=st.session_state.use_web, key="web_toggle")
+with col_footer:
+    st.markdown("""
+<div style="text-align:right; font-size:0.68rem; color:var(--text-muted); padding-top:0.45rem; letter-spacing:0.01em;">
     Connor Cunningham &nbsp;·&nbsp; 2026
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
