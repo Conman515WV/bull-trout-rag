@@ -13,25 +13,26 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;1,14..32,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap');
 
 /* ── Design tokens ─────────────────────────────────────────────── */
 :root {
-    --bg:           #1a1a1a;
-    --bg-surface:   #212121;
-    --bg-input:     #2a2a2a;
-    --bg-user:      #2a2a2a;
-    --bg-chip:      #303030;
-    --bg-chip-on:   #3d3d3d;
-    --bg-hover:     #282828;
-    --border:       #333333;
-    --border-subtle:#2a2a2a;
-    --text:         #f0f0f0;
-    --text-sub:     #8a8a8a;
-    --text-muted:   #5a5a5a;
-    --accent:       #cc785c;
-    --accent-dim:   rgba(204, 120, 92, 0.12);
-    --font:         'Inter', -apple-system, BlinkMacSystemFont, ui-sans-serif, sans-serif;
+    --bg:           #1a1915;
+    --bg-surface:   #1e1d19;
+    --bg-input:     #2a2925;
+    --bg-user:      #2f2e2a;
+    --bg-chip:      #2a2925;
+    --bg-chip-on:   #333029;
+    --bg-hover:     #252420;
+    --border:       #2e2c27;
+    --border-subtle:#252420;
+    --text:         #e8e4d9;
+    --text-sub:     #8c8880;
+    --text-muted:   #5a5650;
+    --accent:       #c96442;
+    --accent-dim:   rgba(201, 100, 66, 0.12);
+    --font:         'Inter', ui-sans-serif, system-ui, sans-serif;
+    --mono:         'JetBrains Mono', ui-monospace, monospace;
     --radius-sm:    8px;
     --radius-md:    12px;
     --radius-lg:    18px;
@@ -52,6 +53,7 @@ html, body, [class*="css"] {
     padding-top: 0 !important;
     padding-bottom: 0.5rem !important;
 }
+
 
 /* ── Password gate ─────────────────────────────────────────────── */
 .password-gate {
@@ -193,11 +195,25 @@ html, body, [class*="css"] {
 [data-testid="stChatMessage"] h2 { font-size: 1rem !important; }
 [data-testid="stChatMessage"] h3 { font-size: 0.9rem !important; color: var(--text-sub) !important; }
 [data-testid="stChatMessage"] code {
-    background: var(--bg-chip) !important;
+    background: var(--bg-surface) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
     border-radius: 5px !important;
     padding: 0.1em 0.4em !important;
     font-size: 0.87em !important;
+    font-family: var(--mono) !important;
     color: var(--text) !important;
+}
+[data-testid="stChatMessage"] pre {
+    background: var(--bg-surface) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 1rem !important;
+}
+[data-testid="stChatMessage"] pre code {
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    font-family: var(--mono) !important;
 }
 [data-testid="stChatMessage"] blockquote {
     border-left: 2px solid var(--border) !important;
@@ -217,8 +233,7 @@ html, body, [class*="css"] {
     max-width: 88% !important;
 }
 /* Avatar icons */
-[data-testid="chatAvatarIcon-user"],
-[data-testid="chatAvatarIcon-assistant"] {
+[data-testid="chatAvatarIcon-user"] {
     background: var(--bg-chip) !important;
     border: 1px solid var(--border) !important;
     border-radius: 50% !important;
@@ -226,6 +241,16 @@ html, body, [class*="css"] {
     height: 28px !important;
     font-size: 0.78rem !important;
     flex-shrink: 0 !important;
+}
+[data-testid="chatAvatarIcon-assistant"] {
+    background: var(--accent) !important;
+    border: none !important;
+    border-radius: 50% !important;
+    width: 28px !important;
+    height: 28px !important;
+    font-size: 0.78rem !important;
+    flex-shrink: 0 !important;
+    color: white !important;
 }
 
 /* ── Bottom bar ────────────────────────────────────────────────── */
@@ -257,13 +282,13 @@ html, body, [class*="css"] {
     color: var(--text-muted) !important;
 }
 [data-testid="stChatInput"] button {
-    background: #f0f0f0 !important;
-    border-radius: 10px !important;
-    color: #1a1a1a !important;
-    transition: background 0.15s !important;
+    background: var(--accent) !important;
+    border-radius: 50% !important;
+    color: #ffffff !important;
+    transition: background 0.15s, opacity 0.15s !important;
 }
 [data-testid="stChatInput"] button:hover {
-    background: #ffffff !important;
+    opacity: 0.85 !important;
 }
 
 /* ── Web search toggle ─────────────────────────────────────────── */
