@@ -505,7 +505,7 @@ if not st.session_state.authenticated:
     </div>
     """, unsafe_allow_html=True)
     password = st.text_input("Access key", type="password", placeholder="Enter access key…", label_visibility="collapsed")
-    if password == "yakima2026":
+    if password == st.secrets.get("APP_PASSWORD", ""):
         st.session_state.authenticated = True
         st.rerun()
     elif password:
