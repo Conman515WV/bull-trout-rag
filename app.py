@@ -6,7 +6,7 @@ import pickle
 
 st.set_page_config(
     page_title="Yakima Fisheries Literature",
-    page_icon=None,
+    page_icon="🐟",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
@@ -29,8 +29,8 @@ st.markdown("""
     --text:         #e8e4d9;
     --text-sub:     #8c8880;
     --text-muted:   #5a5650;
-    --accent:       #6b6b6b;
-    --accent-dim:   rgba(107, 107, 107, 0.12);
+    --accent:       #c96442;
+    --accent-dim:   rgba(201, 100, 66, 0.12);
     --font:         'Inter', ui-sans-serif, system-ui, sans-serif;
     --mono:         'JetBrains Mono', ui-monospace, monospace;
     --radius-sm:    8px;
@@ -121,16 +121,50 @@ html, body, [class*="css"] {
 
 /* ── App header ────────────────────────────────────────────────── */
 .app-header {
-    padding: 2rem 0 1.25rem 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 0 1rem 0;
     margin-bottom: 0.5rem;
     border-bottom: 1px solid var(--border-subtle);
-    text-align: center;
+}
+.app-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+.app-header-icon {
+    width: 26px;
+    height: 26px;
+    background: var(--bg-chip);
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    flex-shrink: 0;
 }
 .app-title {
-    font-size: 1.6rem;
+    font-size: 0.9rem;
     font-weight: 600;
     color: var(--text);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
+}
+.app-subtitle {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-top: 0.05rem;
+}
+.app-model-badge {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-chip);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.2rem 0.55rem;
+    letter-spacing: 0.01em;
 }
 
 /* ── Chat messages ─────────────────────────────────────────────── */
@@ -222,13 +256,8 @@ html, body, [class*="css"] {
 /* ── Bottom bar ────────────────────────────────────────────────── */
 [data-testid="stBottom"] {
     background: linear-gradient(to top, var(--bg) 80%, transparent) !important;
-    padding-bottom: 0.5rem !important;
-    padding-top: 0.5rem !important;
-}
-[data-testid="stBottom"] > div {
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 0 !important;
+    padding-bottom: 1rem !important;
+    padding-top: 0.75rem !important;
 }
 [data-testid="stChatInput"] {
     background: var(--bg-input) !important;
@@ -262,31 +291,13 @@ html, body, [class*="css"] {
     opacity: 0.85 !important;
 }
 
-/* ── Bottom row: toggle left, footer center ────────────────────── */
-.bottom-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.3rem 0.25rem 0.1rem;
-}
-.bottom-row-center {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    letter-spacing: 0.01em;
-    white-space: nowrap;
-    pointer-events: none;
-}
-
 /* ── Web search toggle ─────────────────────────────────────────── */
 div[data-testid="stToggle"] {
     display: inline-flex !important;
     align-items: center !important;
     gap: 0.5rem !important;
-    margin: 0 !important;
-    padding: 0.25rem 0.65rem 0.25rem 0.5rem !important;
+    margin: 0.35rem 0 0.5rem 0.1rem !important;
+    padding: 0.3rem 0.65rem 0.3rem 0.5rem !important;
     background: var(--bg-chip) !important;
     border: 1px solid var(--border) !important;
     border-radius: 99px !important;
@@ -306,6 +317,7 @@ div[data-testid="stToggle"] label {
     letter-spacing: 0.01em !important;
 }
 div[data-testid="stToggle"] label:hover { color: var(--text) !important; }
+/* Toggle track itself */
 div[data-testid="stToggle"] [data-baseweb="toggle"] {
     transform: scale(0.85) !important;
 }
@@ -451,14 +463,13 @@ div[data-testid="stToggle"] [data-baseweb="toggle"] {
     color: var(--text);
 }
 
-/* ── Column gutters in bottom row ──────────────────────────────── */
-[data-testid="stBottom"] [data-testid="stHorizontalBlock"] {
-    gap: 0 !important;
-    padding: 0 !important;
-    align-items: center !important;
-}
-[data-testid="stBottom"] [data-testid="stVerticalBlockBorderWrapper"] {
-    padding: 0 !important;
+/* ── Footer ────────────────────────────────────────────────────── */
+.app-footer {
+    text-align: center;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    padding: 0.75rem 0 0.25rem;
+    letter-spacing: 0.01em;
 }
 
 /* ── Scrollbar ─────────────────────────────────────────────────── */
@@ -487,8 +498,9 @@ if not st.session_state.authenticated:
     st.markdown("""
     <div class="password-gate">
         <div class="password-gate-card">
+            <span class="password-gate-icon">🐟</span>
             <div class="password-gate-title">Yakima Fisheries Literature</div>
-            <div class="password-gate-subtitle">Enter your access key to continue</div>
+            <div class="password-gate-subtitle">RAG-powered scientific literature search</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -595,7 +607,14 @@ def hybrid_retrieve(queries, collection, embed_model, bm25, bm25_texts, bm25_met
 # ── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="app-header">
-    <div class="app-title">Yakima Fisheries Literature</div>
+    <div class="app-header-left">
+        <div class="app-header-icon">🐟</div>
+        <div>
+            <div class="app-title">Yakima Fisheries Literature</div>
+            <div class="app-subtitle">Bull trout ecology &amp; conservation · Yakima Basin</div>
+        </div>
+    </div>
+    <div class="app-model-badge">claude-sonnet</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -605,7 +624,22 @@ if "messages" not in st.session_state:
 if "source_history" not in st.session_state:
     st.session_state.source_history = []
 
-# Empty state — no content shown when no messages
+# Empty state
+if not st.session_state.messages:
+    st.markdown("""
+    <div class="empty-state">
+        <div class="empty-icon">🔬</div>
+        <div class="empty-title">Ask the literature</div>
+        <div class="empty-hint">Search across scientific studies on bull trout, habitat, temperature, hydrology, and more.</div>
+        <div class="suggestion-chips">
+            <span class="chip">Bull trout thermal tolerances</span>
+            <span class="chip">Spawning habitat requirements</span>
+            <span class="chip">Population trends post-2000</span>
+            <span class="chip">Migration barriers</span>
+            <span class="chip">Stream temperature effects</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
@@ -628,8 +662,7 @@ for i, message in enumerate(st.session_state.messages):
                         )
 
 # ── Bottom input area ────────────────────────────────────────────────────────
-if "use_web" not in st.session_state:
-    st.session_state.use_web = False
+use_web = st.toggle("🌐  Web search", value=False, key="web_toggle")
 
 if question := st.chat_input("Ask about Yakima fisheries…"):
     st.session_state.messages.append({"role": "user", "content": question})
@@ -691,7 +724,7 @@ if question := st.chat_input("Ask about Yakima fisheries…"):
         })
 
         tools = []
-        if st.session_state.use_web:
+        if use_web:
             tools.append({"type": "web_search_20250305", "name": "web_search"})
 
         api_kwargs = dict(
@@ -729,12 +762,9 @@ if question := st.chat_input("Ask about Yakima fisheries…"):
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.source_history.append(used_sources)
 
-# ── Web search toggle + footer (renders inside stBottom, below chat input) ────
-col_toggle, col_footer = st.columns([1, 1])
-with col_toggle:
-    st.session_state.use_web = st.toggle("Web search", value=st.session_state.use_web, key="web_toggle")
-with col_footer:
-    st.markdown("""
-<div style="text-align:right; font-size:0.68rem; color:var(--text-muted); padding-top:0.45rem; letter-spacing:0.01em;">
-    Connor Cunningham &nbsp;·&nbsp; 2026
-</div>""", unsafe_allow_html=True)
+# ── Footer ───────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="app-footer">
+    Connor Cunningham &nbsp;·&nbsp; 2026 &nbsp;·&nbsp; USFWS Yakima Basin
+</div>
+""", unsafe_allow_html=True)
