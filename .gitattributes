@@ -1,7 +1,2 @@
-chroma_db/** filter=lfs diff=lfs merge=lfs -text
 bm25_index.pkl filter=lfs diff=lfs merge=lfs -text
-chroma_db/** !text !filter !merge !diff
-bm25_index.pkl !text !filter !merge !diff
-/bm25_index.pkl filter=lfs diff=lfs merge=lfs -text
-/chroma_db/943bed97-ce98-4e8f-95f3-6e5a3cfbf7f6/data_level0.bin filter=lfs diff=lfs merge=lfs -text
-/chroma_db/chroma.sqlite3 filter=lfs diff=lfs merge=lfs -text
+chroma_db/** filter=lfs diff=lfs merge=lfs -text
