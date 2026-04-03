@@ -1,0 +1,597 @@
+"""
+app.py — Yakima Fisheries RAG — Streamlit App
+----------------------------------------------
+6-step retrieval pipeline:
+  1. Query expansion   (Claude Haiku → 3 alt phrasings)
+  2. Vector search     (ChromaDB, 25 results × 4 queries)
+  3. BM25 search       (keyword index, 25 results)
+  4. Deduplication     (merge by parent_id)
+  5. Reranking         (CrossEncoder ms-marco-MiniLM-L-6-v2, keep top 12)
+  6. Generation        (Claude Sonnet, cited answer)
+
+Run locally:
+    py -m streamlit run app.py
+"""
+
+import os
+import re
+import pickle
+import time
+
+import streamlit as st
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from sentence_transformers import CrossEncoder
+import anthropic
+
+# ── Page config (must be first Streamlit call) ────────────────────────────────
+st.set_page_config(
+    page_title="Yakima Fisheries Bot",
+    page_icon="🎣",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+COLLECTION_NAME  = "yakima_fisheries"
+CHROMA_DIR       = "./chroma_db"
+BM25_PATH        = "./bm25_index.pkl"
+EMBED_MODEL      = "sentence-transformers/all-MiniLM-L6-v2"
+RERANK_MODEL     = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+VECTOR_TOP_K     = 25
+BM25_TOP_K       = 25
+RERANK_TOP_N     = 12
+HAIKU_MODEL      = "claude-haiku-4-5"
+SONNET_MODEL     = "claude-sonnet-4-6"
+
+SYSTEM_PROMPT = """\
+You are a senior fisheries biologist with deep expertise in Bull Trout (Salvelinus confluentus) ecology, movement, and conservation in the Yakima Basin. You are assisting U.S. Fish and Wildlife Service (USFWS) biologists, researchers, and technical staff. Your role is to provide precise, literature-grounded, management-relevant answers.
+
+CORE PRINCIPLES:
+- Prioritize accuracy, specificity, and technical rigor over simplicity
+- Treat all responses as if they will inform management decisions or scientific writing
+- Only use information supported by the provided context (RAG excerpts). Do not invent or infer beyond the evidence
+
+CITATION REQUIREMENTS:
+- Cite sources using author-style citations with full title/year context when available (e.g., "Smith et al. (2001)" or "(Jones & Brown, 1998)")
+- Tie every key claim to a citation
+- If multiple sources support a claim, cite them together
+- If sources disagree, explicitly describe the disagreement and cite both sides
+
+TEMPORAL CONTEXT:
+- Explicitly note when findings are based on older literature (especially pre-2000)
+- Highlight when more recent studies refine, contradict, or update earlier conclusions
+- When trends over time are evident, describe how understanding has changed
+
+QUANTITATIVE DETAIL:
+- Always include specific values when available:
+  - Temperatures (°C)
+  - Distances (km, m)
+  - Flow/discharge (cfs or m³/s)
+  - Elevation changes (ft or m)
+  - Survival or entrainment rates
+  - Sample sizes and study duration
+- Avoid qualitative phrases when quantitative data exists
+
+SYNTHESIS AND COMPARISON:
+- Integrate across studies rather than summarizing them independently
+- Identify consensus, uncertainty, and gaps
+- Explicitly state when findings are consistent across systems vs. context-dependent (e.g., reservoir vs. riverine populations)
+- When relevant, relate findings to Yakima Basin systems (Keechelus, Kachess, Cle Elum, Rimrock)
+
+UNCERTAINTY AND LIMITATIONS:
+- Clearly state when the available excerpts are insufficient
+- Identify what is missing (e.g., seasonal resolution, sample size, spatial scale, life stage)
+- Suggest what type of study or data would resolve the uncertainty
+
+STYLE AND STRUCTURE:
+- Use professional biological terminology appropriate for agency scientists
+- Avoid conversational tone
+- Organize complex responses with clear sections such as:
+  - Background
+  - Key Findings
+  - Mechanisms
+  - Management Implications
+  - Uncertainty / Data Gaps
+- Be concise but information-dense
+
+MANAGEMENT RELEVANCE:
+- When appropriate, translate findings into implications for:
+  - Dam operations and entrainment risk
+  - Habitat use and thermal refugia
+  - Trap-and-haul or passage strategies
+  - Monitoring (PIT, acoustic telemetry)
+- Do not speculate beyond what the literature supports
+
+STRICT GROUNDING:
+- Do not use outside knowledge unless explicitly instructed
+- Do not hallucinate citations or results
+- If the provided excerpts do not support a claim, state that directly
+
+FAILURE MODE:
+- If the context is insufficient to answer the question:
+  - Say exactly what is missing
+  - Provide a minimal partial answer only if supported
+  - Recommend the type of source needed (e.g., telemetry study, thermal habitat study, entrainment modeling paper)
+
+Your responses should reflect the level of detail and rigor expected in a technical briefing or manuscript discussion section, not a general summary.
+"""
+
+WEB_SEARCH_SYSTEM = """\
+You are a fisheries science assistant. The user's question has been supplemented
+with recent web search results in addition to the literature library.
+Clearly distinguish between findings from the literature vs. web sources.
+Always cite sources inline.
+"""
+
+# ── CSS / Styling ─────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono&display=swap');
+
+  html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .stApp { background-color: #2b2b2b; color: #e0e0e0; }
+
+  /* Header */
+  .app-header {
+    padding: 1.5rem 0 0.5rem 0;
+    border-bottom: 2px solid #e87722;
+    margin-bottom: 1.5rem;
+    text-align: center;
+  }
+  .app-title {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: #e87722;
+    margin: 0;
+    text-align: center;
+  }
+
+  /* Chat messages */
+  .user-msg {
+    background: #3a3a3a;
+    border-left: 3px solid #e87722;
+    padding: 0.8rem 1rem;
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 1rem;
+  }
+  .assistant-msg {
+    background: #333333;
+    border-left: 3px solid #c45e0a;
+    padding: 0.8rem 1rem;
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 0.5rem;
+  }
+
+  /* Source cards */
+  .source-card {
+    background: #3a3a3a;
+    border: 1px solid #555555;
+    border-radius: 6px;
+    padding: 0.5rem 0.8rem;
+    margin: 0.3rem 0;
+    font-size: 0.82rem;
+    color: #c0c0c0;
+  }
+  .source-title { color: #e87722; font-weight: 500; }
+  .source-year  { color: #999999; margin-left: 0.5rem; }
+
+  /* Input area */
+  .stTextInput > div > div > input {
+    background-color: #3a3a3a !important;
+    border: 1px solid #555555 !important;
+    color: #e0e0e0 !important;
+    font-family: 'IBM Plex Sans', sans-serif !important;
+  }
+  .stButton > button {
+    background-color: #e87722;
+    color: white;
+    border: none;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .stButton > button:hover { background-color: #c45e0a; }
+
+  /* Spinner */
+  .status-text { color: #6c7280; font-size: 0.85rem; font-style: italic; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── Password Gate ─────────────────────────────────────────────────────────────
+
+def check_password() -> bool:
+    """Returns True once the correct password has been entered."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown('<div class="app-header"><p class="app-title">Yakima Fisheries Bot</p></div>', unsafe_allow_html=True)
+    st.markdown("#### Enter access password")
+
+    pw = st.text_input("Password", type="password", key="pw_input")
+    if st.button("Login"):
+        if pw == st.secrets.get("APP_PASSWORD", "yakima2026"):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+
+# ── Resource Loading (cached) ─────────────────────────────────────────────────
+
+@st.cache_resource(show_spinner=False)
+def load_resources():
+    """Load all models and indexes once at startup."""
+
+    # ── Download from Hugging Face if not present locally ──────────────────
+    if not os.path.exists(CHROMA_DIR) or not os.path.exists(BM25_PATH):
+        hf_token  = st.secrets.get("HF_TOKEN", "")
+        hf_repo   = st.secrets.get("HF_REPO", "")
+        if hf_token and hf_repo:
+            from huggingface_hub import snapshot_download
+            st.info("Downloading database from Hugging Face (first launch only)…")
+            snapshot_download(
+                repo_id=hf_repo,
+                repo_type="dataset",
+                local_dir=".",
+                token=hf_token,
+            )
+        else:
+            st.error(
+                "Database not found locally and HF_TOKEN / HF_REPO not set in secrets. "
+                "Run ingest.py first, or configure Hugging Face credentials."
+            )
+            st.stop()
+
+    # ── ChromaDB ───────────────────────────────────────────────────────────
+    embed_fn   = SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
+    chroma     = chromadb.PersistentClient(path=CHROMA_DIR)
+    collection = chroma.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
+
+    # ── BM25 ───────────────────────────────────────────────────────────────
+    with open(BM25_PATH, "rb") as f:
+        bm25_payload = pickle.load(f)
+    bm25          = bm25_payload["bm25"]
+    bm25_texts    = bm25_payload["texts"]
+    bm25_metadata = bm25_payload["metadata"]
+
+    # ── CrossEncoder ───────────────────────────────────────────────────────
+    reranker = CrossEncoder(RERANK_MODEL)
+
+    # ── Anthropic client ───────────────────────────────────────────────────
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+    return collection, bm25, bm25_texts, bm25_metadata, reranker, client
+
+
+# ── Pipeline Steps ────────────────────────────────────────────────────────────
+
+def expand_query(question: str, client: anthropic.Anthropic) -> list[str]:
+    """Step 1: Use Claude Haiku to generate 3 alternative search queries."""
+    prompt = (
+        f"Generate 3 alternative search queries for a fisheries literature database. "
+        f"Each query should use different terminology but retrieve relevant papers. "
+        f"Return ONLY the 3 queries, one per line, no numbering or extra text.\n\n"
+        f"Original question: {question}"
+    )
+    resp = client.messages.create(
+        model=HAIKU_MODEL,
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    lines = resp.content[0].text.strip().splitlines()
+    queries = [q.strip() for q in lines if q.strip()][:3]
+    return [question] + queries  # original + 3 alternatives = 4 total
+
+
+def vector_search(
+    queries: list[str],
+    collection,
+    top_k: int = VECTOR_TOP_K,
+) -> list[dict]:
+    """Step 2: Run vector search for each query, collect results."""
+    candidates = {}  # parent_id → result dict (dedup by parent)
+    for q in queries:
+        results = collection.query(
+            query_texts=[q],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+        docs      = results["documents"][0]
+        metas     = results["metadatas"][0]
+        distances = results["distances"][0]
+
+        for doc, meta, dist in zip(docs, metas, distances):
+            pid = meta.get("parent_id", doc[:40])
+            if pid not in candidates:
+                candidates[pid] = {
+                    "parent_id":   pid,
+                    "parent_text": meta.get("parent_text", doc),
+                    "source":      meta.get("source", ""),
+                    "title":       meta.get("title", ""),
+                    "year":        meta.get("year", ""),
+                    "score":       1 - dist,  # cosine similarity
+                }
+    return list(candidates.values())
+
+
+def bm25_search(
+    question: str,
+    bm25,
+    bm25_texts: list[str],
+    bm25_metadata: list[dict],
+    top_k: int = BM25_TOP_K,
+) -> list[dict]:
+    """Step 3: BM25 keyword search on the original question."""
+    tokens = question.lower().split()
+    scores = bm25.get_scores(tokens)
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+
+    results = []
+    for i in top_indices:
+        if scores[i] <= 0:
+            continue
+        meta = bm25_metadata[i]
+        results.append({
+            "parent_id":   meta.get("parent_id", f"bm25_{i}"),
+            "parent_text": bm25_texts[i],
+            "source":      meta.get("source", ""),
+            "title":       meta.get("title", ""),
+            "year":        meta.get("year", ""),
+            "score":       float(scores[i]),
+        })
+    return results
+
+
+def deduplicate(vector_results: list[dict], bm25_results: list[dict]) -> list[dict]:
+    """Step 4: Merge vector + BM25 results, deduplicate by parent_id."""
+    seen = {}
+    for r in vector_results + bm25_results:
+        pid = r["parent_id"]
+        if pid not in seen:
+            seen[pid] = r
+    return list(seen.values())
+
+
+def rerank(
+    question: str,
+    candidates: list[dict],
+    reranker: CrossEncoder,
+    top_n: int = RERANK_TOP_N,
+) -> list[dict]:
+    """Step 5: CrossEncoder reranking — keep top_n by relevance score."""
+    if not candidates:
+        return []
+    pairs  = [(question, c["parent_text"]) for c in candidates]
+    scores = reranker.predict(pairs)
+    scores = [float(s) for s in scores]  # ensure plain floats
+
+    ranked = sorted(
+        zip(scores, candidates),
+        key=lambda x: x[0],
+        reverse=True,
+    )
+    return [c for _, c in ranked[:top_n]]
+
+
+def build_context(chunks: list[dict]) -> str:
+    """Format reranked chunks into a numbered context block for Claude."""
+    parts = []
+    for i, c in enumerate(chunks, 1):
+        header = f"[{i}] {c['title']} ({c['year']}) — {c['source']}"
+        parts.append(f"{header}\n{c['parent_text']}")
+    return "\n\n---\n\n".join(parts)
+
+
+def generate_answer(
+    question: str,
+    context: str,
+    history: list[dict],
+    client: anthropic.Anthropic,
+    use_web: bool = False,
+    web_snippets: str = "",
+) -> str:
+    """Step 6: Generate a cited answer using Claude Sonnet with prompt caching."""
+    system = WEB_SEARCH_SYSTEM if use_web else SYSTEM_PROMPT
+
+    literature_block = (
+        f"<literature>\n{context}\n</literature>"
+    )
+    web_block = (
+        f"\n\n<web_results>\n{web_snippets}\n</web_results>"
+        if use_web and web_snippets else ""
+    )
+
+    # Build message history (conversation memory)
+    messages = []
+    for turn in history:
+        messages.append({"role": turn["role"], "content": turn["content"]})
+
+    # Current turn — literature context as first user message in this turn
+    user_content = (
+        f"{literature_block}{web_block}\n\n"
+        f"Question: {question}"
+    )
+    messages.append({"role": "user", "content": user_content})
+
+    resp = client.beta.messages.create(
+        model=SONNET_MODEL,
+        max_tokens=6000,
+        system=[
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=messages,
+        betas=["prompt-caching-2024-07-31"],
+    )
+    return resp.content[0].text
+
+
+def web_search_snippets(question: str) -> str:
+    """Fetch brief web search results using DuckDuckGo (no API key needed)."""
+    try:
+        import urllib.parse, urllib.request, html
+        q  = urllib.parse.quote_plus(question + " fisheries")
+        url = f"https://html.duckduckgo.com/html/?q={q}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = r.read().decode("utf-8", errors="ignore")
+
+        # Extract plain-text snippets from result divs
+        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL)
+        clean = []
+        for s in snippets[:5]:
+            s = re.sub(r"<[^>]+>", "", s)
+            s = html.unescape(s).strip()
+            if s:
+                clean.append(s)
+        return "\n\n".join(clean)
+    except Exception:
+        return ""
+
+
+# ── Main App ──────────────────────────────────────────────────────────────────
+
+def main():
+    if not check_password():
+        return
+
+    # ── Load resources ────────────────────────────────────────────────────
+    with st.spinner("Loading models and database…"):
+        collection, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
+
+    # ── Session state ─────────────────────────────────────────────────────
+    if "messages" not in st.session_state:
+        st.session_state.messages = []   # full chat history
+    if "history" not in st.session_state:
+        st.session_state.history  = []   # Claude message history (role/content)
+
+    # ── Header ────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="app-header">'
+        '<p class="app-title">Yakima Fisheries Bot</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Render chat history ───────────────────────────────────────────────
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            st.markdown(
+                f'<div class="user-msg">🧑‍🔬 {msg["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="assistant-msg">{msg["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+            # Source cards
+            if msg.get("sources"):
+                with st.expander(f"📄 Sources ({len(msg['sources'])} papers)", expanded=False):
+                    for src in msg["sources"]:
+                        st.markdown(
+                            f'<div class="source-card">'
+                            f'<span class="source-title">{src["title"]}</span>'
+                            f'<span class="source-year">{src["year"]}</span>'
+                            f'<br><span style="color:#4b5563;font-size:0.75rem">{src["source"]}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+    # ── Input area ────────────────────────────────────────────────────────
+    st.divider()
+
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        question = st.text_input(
+            "Ask a question about Yakima Basin fisheries…",
+            key="question_input",
+            label_visibility="collapsed",
+            placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
+        )
+    with col2:
+        use_web = st.toggle("🌐 Web", value=False, help="Supplement with live web search results")
+
+    ask_btn = st.button("Ask →", use_container_width=False)
+
+    if not (ask_btn and question.strip()):
+        if not st.session_state.messages:
+            st.markdown(
+                '<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">'
+                'Connor Cunningham 2026'
+                '</p>',
+                unsafe_allow_html=True,
+            )
+        return
+
+    question = question.strip()
+
+    # ── Run pipeline ──────────────────────────────────────────────────────
+    st.session_state.messages.append({"role": "user", "content": question})
+
+    with st.status("Searching literature…", expanded=True) as status:
+
+        st.write("🔍 Expanding query with Claude Haiku…")
+        queries = expand_query(question, client)
+
+        st.write(f"📚 Vector search ({len(queries)} queries × {VECTOR_TOP_K} results)…")
+        vec_results = vector_search(queries, collection)
+
+        st.write(f"🔤 BM25 keyword search…")
+        bm25_results = bm25_search(question, bm25, bm25_texts, bm25_meta)
+
+        st.write("🔗 Deduplicating candidates…")
+        candidates = deduplicate(vec_results, bm25_results)
+        st.write(f"   → {len(candidates)} unique candidates")
+
+        st.write(f"⚖️  Reranking with CrossEncoder → keeping top {RERANK_TOP_N}…")
+        top_chunks = rerank(question, candidates, reranker)
+
+        if use_web:
+            st.write("🌐 Fetching web results…")
+            snippets = web_search_snippets(question)
+        else:
+            snippets = ""
+
+        st.write("✍️  Generating answer with Claude Sonnet…")
+        context = build_context(top_chunks)
+        answer  = generate_answer(
+            question,
+            context,
+            st.session_state.history,
+            client,
+            use_web=use_web,
+            web_snippets=snippets,
+        )
+        status.update(label="Done!", state="complete", expanded=False)
+
+    # ── Save to history ───────────────────────────────────────────────────
+    # Keep Claude history for conversation memory (role/content only)
+    st.session_state.history.append({"role": "user", "content": question})
+    st.session_state.history.append({"role": "assistant", "content": answer})
+
+    # Deduplicate sources for display
+    seen_src = {}
+    for c in top_chunks:
+        pid = c["parent_id"]
+        if pid not in seen_src:
+            seen_src[pid] = {"title": c["title"], "year": c["year"], "source": c["source"]}
+    sources = list(seen_src.values())
+
+    st.session_state.messages.append({
+        "role":    "assistant",
+        "content": answer,
+        "sources": sources,
+    })
+
+    st.rerun()
+
+
+if __name__ == "__main__":
+    main()

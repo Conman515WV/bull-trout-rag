@@ -1,0 +1,24 @@
+# Secrets — never commit
+.streamlit/secrets.toml
+
+# Large database files — stored on Hugging Face instead
+chroma_db/
+bm25_index.pkl
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Virtual environments
+venv/
+.env/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
