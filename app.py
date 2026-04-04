@@ -142,7 +142,7 @@ st.markdown("""
     text-align: center;
   }
   .app-title {
-    font-size: 2.2rem;
+    font-size: 3.6rem;
     font-weight: 700;
     color: #e87722;
     margin: 0;
@@ -231,7 +231,6 @@ def load_resources():
         hf_repo   = st.secrets.get("HF_REPO", "")
         if hf_token and hf_repo:
             from huggingface_hub import snapshot_download
-            st.info("Downloading database from Hugging Face (first launch only)…")
             snapshot_download(
                 repo_id=hf_repo,
                 repo_type="dataset",
