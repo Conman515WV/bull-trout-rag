@@ -134,6 +134,14 @@ st.markdown("""
   }
   .stApp { background-color: #2b2b2b; color: #e0e0e0; }
 
+  /* Center content in a readable column */
+  .block-container {
+    max-width: 860px !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+    margin: 0 auto !important;
+  }
+
   /* Header */
   .app-header {
     padding: 1.5rem 0 0.5rem 0;
