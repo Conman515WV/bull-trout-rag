@@ -1,8 +1,0 @@
-anthropic
-chromadb
-huggingface_hub
-langchain-text-splitters
-pdfplumber
-rank-bm25
-sentence-transformers
-streamlit
