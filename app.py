@@ -26,8 +26,7 @@ import time
 
 import streamlit as st
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-from sentence_transformers import CrossEncoder
+from sentence_transformers import CrossEncoder, SentenceTransformer
 import anthropic
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
@@ -259,12 +258,11 @@ def load_resources():
             st.stop()
 
     # ── ChromaDB ───────────────────────────────────────────────────────────
-    embed_fn   = SentenceTransformerEmbeddingFunction(
-        model_name=EMBED_MODEL,
-        normalize_embeddings=True  # required for BGE models
-    )
     chroma     = chromadb.PersistentClient(path=CHROMA_DIR)
-    collection = chroma.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
+    collection = chroma.get_collection(name=COLLECTION_NAME)
+
+    # ── Embedding model ────────────────────────────────────────────────────
+    embed_model = SentenceTransformer(EMBED_MODEL)
 
     # ── BM25 ───────────────────────────────────────────────────────────────
     with open(BM25_PATH, "rb") as f:
@@ -279,7 +277,7 @@ def load_resources():
     # ── Anthropic client ───────────────────────────────────────────────────
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
-    return collection, bm25, bm25_texts, bm25_metadata, reranker, client
+    return collection, bm25, bm25_texts, bm25_metadata, reranker, client, embed_model
 
 
 # ── Pipeline Steps ────────────────────────────────────────────────────────────
@@ -305,15 +303,16 @@ def expand_query(question: str, client: anthropic.Anthropic) -> list[str]:
 def vector_search(
     queries: list[str],
     collection,
+    embed_model,
     top_k: int = VECTOR_TOP_K,
 ) -> list[dict]:
     """Step 2: Run vector search for each query, collect results."""
-    candidates = {}  # parent_id → result dict (dedup by parent)
+    candidates = {}
     for q in queries:
-        # BGE models require this prefix for retrieval queries
         prefixed_q = f"Represent this sentence for searching relevant passages: {q}"
+        q_embedding = embed_model.encode(prefixed_q, normalize_embeddings=True).tolist()
         results = collection.query(
-            query_texts=[prefixed_q],
+            query_embeddings=[q_embedding],
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
@@ -489,7 +488,7 @@ def main():
 
     # ── Load resources ────────────────────────────────────────────────────
     with st.spinner("Loading models and database…"):
-        collection, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
+        collection, bm25, bm25_texts, bm25_meta, reranker, client, embed_model = load_resources()
 
     # ── Session state ─────────────────────────────────────────────────────
     if "messages" not in st.session_state:
@@ -573,7 +572,7 @@ def main():
         queries = expand_query(question, client)
 
         st.write(f"📚 Vector search ({len(queries)} queries × {VECTOR_TOP_K} results)…")
-        vec_results = vector_search(queries, collection)
+        vec_results = vector_search(queries, collection, embed_model)
 
         st.write(f"🔤 BM25 keyword search…")
         bm25_results = bm25_search(question, bm25, bm25_texts, bm25_meta)
