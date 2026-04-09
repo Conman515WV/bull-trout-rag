@@ -1,770 +1,635 @@
-import streamlit as st
-from anthropic import Anthropic
-import chromadb
-from sentence_transformers import SentenceTransformer, CrossEncoder
-import pickle
+"""
+app.py — Yakima Fisheries RAG — Streamlit App
+----------------------------------------------
+6-step retrieval pipeline:
+  1. Query expansion   (Claude Haiku → 3 alt phrasings)
+  2. Vector search     (ChromaDB + BAAI/bge-large-en-v1.5, 25 results × 4 queries)
+  3. BM25 search       (keyword index, 25 results)
+  4. Deduplication     (merge by parent_id)
+  5. Reranking         (CrossEncoder ms-marco-MiniLM-L-6-v2, keep top 12)
+  6. Generation        (Claude Sonnet, cited answer)
 
+Secrets required (Streamlit Cloud → Advanced settings):
+  ANTHROPIC_API_KEY = "sk-ant-..."
+  APP_PASSWORD      = "your-password"
+  HF_TOKEN          = "hf_..."           # Hugging Face read token
+  HF_REPO           = "username/yakima-rag-db"  # Hugging Face dataset repo
+
+Run locally:
+    py -m streamlit run app.py
+"""
+
+import os
+import re
+import pickle
+import time
+
+import streamlit as st
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from sentence_transformers import CrossEncoder
+import anthropic
+
+# ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
-    page_title="Yakima Fisheries Literature",
-    page_icon="🐟",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    page_title="Yakima Fisheries Bot",
+    page_icon="🎣",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+COLLECTION_NAME  = "yakima"
+CHROMA_DIR       = "./chroma_db"
+BM25_PATH        = "./bm25_index.pkl"
+EMBED_MODEL      = "BAAI/bge-large-en-v1.5"
+RERANK_MODEL     = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+VECTOR_TOP_K     = 25
+BM25_TOP_K       = 25
+RERANK_TOP_N     = 12
+HAIKU_MODEL      = "claude-haiku-4-5-20251001"
+SONNET_MODEL     = "claude-sonnet-4-6"
+
+SYSTEM_PROMPT = """\
+You are a senior fisheries biologist with deep expertise in Bull Trout (Salvelinus confluentus) ecology, movement, and conservation in the Yakima Basin. You are assisting U.S. Fish and Wildlife Service (USFWS) biologists, researchers, and technical staff. Your role is to provide precise, literature-grounded, management-relevant answers.
+
+CORE PRINCIPLES:
+- Prioritize accuracy, specificity, and technical rigor over simplicity
+- Treat all responses as if they will inform management decisions or scientific writing
+- Only use information supported by the provided context (RAG excerpts). Do not invent or infer beyond the evidence
+
+CITATION REQUIREMENTS:
+- Cite sources using author-style citations with full title/year context when available (e.g., "Smith et al. (2001)" or "(Jones & Brown, 1998)")
+- Tie every key claim to a citation
+- If multiple sources support a claim, cite them together
+- If sources disagree, explicitly describe the disagreement and cite both sides
+
+TEMPORAL CONTEXT:
+- Explicitly note when findings are based on older literature (especially pre-2000)
+- Highlight when more recent studies refine, contradict, or update earlier conclusions
+- When trends over time are evident, describe how understanding has changed
+
+QUANTITATIVE DETAIL:
+- Always include specific values when available:
+  - Temperatures (°C)
+  - Distances (km, m)
+  - Flow/discharge (cfs or m³/s)
+  - Elevation changes (ft or m)
+  - Survival or entrainment rates
+  - Sample sizes and study duration
+- Avoid qualitative phrases when quantitative data exists
+
+SYNTHESIS AND COMPARISON:
+- Integrate across studies rather than summarizing them independently
+- Identify consensus, uncertainty, and gaps
+- Explicitly state when findings are consistent across systems vs. context-dependent (e.g., reservoir vs. riverine populations)
+- When relevant, relate findings to Yakima Basin systems (Keechelus, Kachess, Cle Elum, Rimrock)
+
+UNCERTAINTY AND LIMITATIONS:
+- Clearly state when the available excerpts are insufficient
+- Identify what is missing (e.g., seasonal resolution, sample size, spatial scale, life stage)
+- Suggest what type of study or data would resolve the uncertainty
+
+STYLE AND STRUCTURE:
+- Use professional biological terminology appropriate for agency scientists
+- Avoid conversational tone
+- Organize complex responses with clear sections such as:
+  - Background
+  - Key Findings
+  - Mechanisms
+  - Management Implications
+  - Uncertainty / Data Gaps
+- Be concise but information-dense
+
+MANAGEMENT RELEVANCE:
+- When appropriate, translate findings into implications for:
+  - Dam operations and entrainment risk
+  - Habitat use and thermal refugia
+  - Trap-and-haul or passage strategies
+  - Monitoring (PIT, acoustic telemetry)
+- Do not speculate beyond what the literature supports
+
+STRICT GROUNDING:
+- Do not use outside knowledge unless explicitly instructed
+- Do not hallucinate citations or results
+- If the provided excerpts do not support a claim, state that directly
+
+FAILURE MODE:
+- If the context is insufficient to answer the question:
+  - Say exactly what is missing
+  - Provide a minimal partial answer only if supported
+  - Recommend the type of source needed (e.g., telemetry study, thermal habitat study, entrainment modeling paper)
+
+Your responses should reflect the level of detail and rigor expected in a technical briefing or manuscript discussion section, not a general summary.
+"""
+
+WEB_SEARCH_SYSTEM = """\
+You are a fisheries science assistant. The user's question has been supplemented
+with recent web search results in addition to the literature library.
+Clearly distinguish between findings from the literature vs. web sources.
+Always cite sources inline.
+"""
+
+# ── CSS / Styling ─────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono&display=swap');
 
-/* ── Design tokens ─────────────────────────────────────────────── */
-:root {
-    --bg:           #1a1915;
-    --bg-surface:   #1e1d19;
-    --bg-input:     #2a2925;
-    --bg-user:      #2f2e2a;
-    --bg-chip:      #2a2925;
-    --bg-chip-on:   #333029;
-    --bg-hover:     #252420;
-    --border:       #2e2c27;
-    --border-subtle:#252420;
-    --text:         #e8e4d9;
-    --text-sub:     #8c8880;
-    --text-muted:   #5a5650;
-    --accent:       #c96442;
-    --accent-dim:   rgba(201, 100, 66, 0.12);
-    --font:         'Inter', ui-sans-serif, system-ui, sans-serif;
-    --mono:         'JetBrains Mono', ui-monospace, monospace;
-    --radius-sm:    8px;
-    --radius-md:    12px;
-    --radius-lg:    18px;
-    --radius-xl:    24px;
-}
+  html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .stApp { background-color: #2b2b2b; color: #e0e0e0; }
 
-/* ── Base ──────────────────────────────────────────────────────── */
-html, body, [class*="css"] {
-    font-family: var(--font) !important;
-    background-color: var(--bg) !important;
-    color: var(--text) !important;
-}
-#MainMenu, footer, header { visibility: hidden; }
-[data-testid="stSidebar"]        { display: none !important; }
-[data-testid="collapsedControl"] { display: none !important; }
-.block-container {
-    max-width: 740px !important;
-    padding-top: 0 !important;
-    padding-bottom: 0.5rem !important;
-}
+  /* Center content in a readable column */
+  .block-container {
+    max-width: 860px !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+    margin: 0 auto !important;
+  }
 
-
-/* ── Password gate ─────────────────────────────────────────────── */
-.password-gate {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 80vh;
-    gap: 0;
-}
-.password-gate-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    padding: 2.5rem 2rem;
-    width: 100%;
-    max-width: 380px;
+  /* Header */
+  .app-header {
+    padding: 1.5rem 0 0.5rem 0;
+    border-bottom: 2px solid #e87722;
+    margin-bottom: 1.5rem;
     text-align: center;
-}
-.password-gate-icon {
-    font-size: 2rem;
+  }
+  .app-title {
+    font-size: 3.6rem;
+    font-weight: 700;
+    color: #e87722;
+    margin: 0;
+    text-align: center;
+  }
+
+  /* Chat messages */
+  .user-msg {
+    background: #3a3a3a;
+    border-left: 3px solid #e87722;
+    padding: 0.8rem 1rem;
+    border-radius: 0 6px 6px 0;
     margin-bottom: 1rem;
-    display: block;
-}
-.password-gate-title {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--text);
-    margin-bottom: 0.25rem;
-    letter-spacing: -0.015em;
-}
-.password-gate-subtitle {
-    font-size: 0.8rem;
-    color: var(--text-sub);
-    margin-bottom: 1.75rem;
-}
-.stTextInput > label {
-    font-size: 0.75rem !important;
-    color: var(--text-sub) !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.03em !important;
-    text-transform: uppercase !important;
-    margin-bottom: 0.4rem !important;
-}
-.stTextInput input {
-    background: var(--bg-input) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-md) !important;
-    color: var(--text) !important;
-    font-family: var(--font) !important;
-    font-size: 0.9rem !important;
-    padding: 0.7rem 1rem !important;
-    transition: border-color 0.2s, box-shadow 0.2s;
-    outline: none !important;
-    box-shadow: none !important;
-    caret-color: var(--accent) !important;
-}
-.stTextInput input:focus {
-    border-color: #4a4a4a !important;
-    box-shadow: 0 0 0 3px rgba(255,255,255,0.04) !important;
-}
-.stTextInput input::placeholder {
-    color: var(--text-muted) !important;
-}
-
-/* ── App header ────────────────────────────────────────────────── */
-.app-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1.25rem 0 1rem 0;
+  }
+  .assistant-msg {
+    background: #333333;
+    border-left: 3px solid #c45e0a;
+    padding: 0.8rem 1rem;
+    border-radius: 0 6px 6px 0;
     margin-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border-subtle);
-}
-.app-header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-}
-.app-header-icon {
-    width: 26px;
-    height: 26px;
-    background: var(--bg-chip);
-    border-radius: 7px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.85rem;
-    flex-shrink: 0;
-}
-.app-title {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--text);
-    letter-spacing: -0.01em;
-}
-.app-subtitle {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    font-weight: 400;
-    margin-top: 0.05rem;
-}
-.app-model-badge {
-    font-size: 0.68rem;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: var(--bg-chip);
-    border: 1px solid var(--border);
+  }
+
+  /* Source cards */
+  .source-card {
+    background: #3a3a3a;
+    border: 1px solid #555555;
     border-radius: 6px;
-    padding: 0.2rem 0.55rem;
-    letter-spacing: 0.01em;
-}
+    padding: 0.5rem 0.8rem;
+    margin: 0.3rem 0;
+    font-size: 0.82rem;
+    color: #c0c0c0;
+  }
+  .source-title { color: #e87722; font-weight: 500; }
+  .source-year  { color: #999999; margin-left: 0.5rem; }
 
-/* ── Chat messages ─────────────────────────────────────────────── */
-[data-testid="stChatMessage"] {
-    background: transparent !important;
-    border: none !important;
-    border-radius: 0 !important;
-    padding: 0.6rem 0 !important;
-    margin-bottom: 0 !important;
-    gap: 0.9rem !important;
-}
-[data-testid="stChatMessage"] p,
-[data-testid="stChatMessage"] li,
-[data-testid="stChatMessage"] td {
-    color: var(--text) !important;
-    font-size: 0.9375rem !important;
-    line-height: 1.72 !important;
-}
-[data-testid="stChatMessage"] h1,
-[data-testid="stChatMessage"] h2,
-[data-testid="stChatMessage"] h3 {
-    color: var(--text) !important;
-    font-weight: 600 !important;
-    letter-spacing: -0.01em !important;
-    margin-top: 1.25rem !important;
-    margin-bottom: 0.4rem !important;
-}
-[data-testid="stChatMessage"] h2 { font-size: 1rem !important; }
-[data-testid="stChatMessage"] h3 { font-size: 0.9rem !important; color: var(--text-sub) !important; }
-[data-testid="stChatMessage"] code {
-    background: var(--bg-surface) !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
-    border-radius: 5px !important;
-    padding: 0.1em 0.4em !important;
-    font-size: 0.87em !important;
-    font-family: var(--mono) !important;
-    color: var(--text) !important;
-}
-[data-testid="stChatMessage"] pre {
-    background: var(--bg-surface) !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
-    border-radius: var(--radius-sm) !important;
-    padding: 1rem !important;
-}
-[data-testid="stChatMessage"] pre code {
-    border: none !important;
-    background: transparent !important;
-    padding: 0 !important;
-    font-family: var(--mono) !important;
-}
-[data-testid="stChatMessage"] blockquote {
-    border-left: 2px solid var(--border) !important;
-    padding-left: 0.85rem !important;
-    color: var(--text-sub) !important;
-    margin: 0.75rem 0 !important;
-}
-/* User message pill */
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-    background: transparent !important;
-}
-[data-testid="stChatMessage"] [data-testid="chatAvatarIcon-user"] + div {
-    background: var(--bg-user) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-lg) !important;
-    padding: 0.7rem 1.05rem !important;
-    max-width: 88% !important;
-}
-/* Avatar icons */
-[data-testid="chatAvatarIcon-user"] {
-    background: var(--bg-chip) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 50% !important;
-    width: 28px !important;
-    height: 28px !important;
-    font-size: 0.78rem !important;
-    flex-shrink: 0 !important;
-}
-[data-testid="chatAvatarIcon-assistant"] {
-    background: var(--accent) !important;
-    border: none !important;
-    border-radius: 50% !important;
-    width: 28px !important;
-    height: 28px !important;
-    font-size: 0.78rem !important;
-    flex-shrink: 0 !important;
-    color: white !important;
-}
+  /* Input area */
+  .stTextInput > div > div > input {
+    background-color: #3a3a3a !important;
+    border: 1px solid #555555 !important;
+    color: #e0e0e0 !important;
+    font-family: 'IBM Plex Sans', sans-serif !important;
+  }
+  .stButton > button {
+    background-color: #e87722;
+    color: white;
+    border: none;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .stButton > button:hover { background-color: #c45e0a; }
 
-/* ── Bottom bar ────────────────────────────────────────────────── */
-[data-testid="stBottom"] {
-    background: linear-gradient(to top, var(--bg) 80%, transparent) !important;
-    padding-bottom: 1rem !important;
-    padding-top: 0.75rem !important;
-}
-[data-testid="stChatInput"] {
-    background: var(--bg-input) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-xl) !important;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.3) !important;
-    transition: border-color 0.2s, box-shadow 0.2s;
-}
-[data-testid="stChatInput"]:focus-within {
-    border-color: #484848 !important;
-    box-shadow: 0 2px 16px rgba(0,0,0,0.4) !important;
-}
-[data-testid="stChatInput"] textarea {
-    color: var(--text) !important;
-    font-family: var(--font) !important;
-    font-size: 0.9375rem !important;
-    background: transparent !important;
-    padding: 0.85rem 1.1rem !important;
-    caret-color: var(--accent) !important;
-}
-[data-testid="stChatInput"] textarea::placeholder {
-    color: var(--text-muted) !important;
-}
-[data-testid="stChatInput"] button {
-    background: var(--accent) !important;
-    border-radius: 50% !important;
-    color: #ffffff !important;
-    transition: background 0.15s, opacity 0.15s !important;
-}
-[data-testid="stChatInput"] button:hover {
-    opacity: 0.85 !important;
-}
-
-/* ── Web search toggle ─────────────────────────────────────────── */
-div[data-testid="stToggle"] {
-    display: inline-flex !important;
-    align-items: center !important;
-    gap: 0.5rem !important;
-    margin: 0.35rem 0 0.5rem 0.1rem !important;
-    padding: 0.3rem 0.65rem 0.3rem 0.5rem !important;
-    background: var(--bg-chip) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 99px !important;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-}
-div[data-testid="stToggle"]:hover {
-    background: var(--bg-chip-on) !important;
-    border-color: #444 !important;
-}
-div[data-testid="stToggle"] label {
-    font-size: 0.75rem !important;
-    color: var(--text-sub) !important;
-    font-weight: 500 !important;
-    cursor: pointer !important;
-    user-select: none !important;
-    letter-spacing: 0.01em !important;
-}
-div[data-testid="stToggle"] label:hover { color: var(--text) !important; }
-/* Toggle track itself */
-div[data-testid="stToggle"] [data-baseweb="toggle"] {
-    transform: scale(0.85) !important;
-}
-
-/* ── Source expander ───────────────────────────────────────────── */
-[data-testid="stExpander"] {
-    background: transparent !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-md) !important;
-    margin-top: 0.75rem !important;
-    overflow: hidden !important;
-}
-[data-testid="stExpander"] summary {
-    color: var(--text-sub) !important;
-    font-size: 0.76rem !important;
-    font-weight: 500 !important;
-    padding: 0.55rem 0.9rem !important;
-    letter-spacing: 0.01em !important;
-}
-[data-testid="stExpander"] summary:hover {
-    color: var(--text) !important;
-    background: var(--bg-hover) !important;
-}
-[data-testid="stExpander"] > div > div {
-    padding: 0 0.9rem 0.75rem !important;
-}
-[data-testid="stExpander"] svg { color: var(--text-muted) !important; }
-
-/* ── Source rows ───────────────────────────────────────────────── */
-.source-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.55rem 0;
-    border-bottom: 1px solid var(--border-subtle);
-}
-.source-row:last-child { border-bottom: none; }
-.source-badge {
-    font-size: 0.63rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    background: var(--bg-chip);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 0.18rem 0.5rem;
-    white-space: nowrap;
-    flex-shrink: 0;
-    margin-top: 0.1rem;
-    letter-spacing: 0.02em;
-    font-variant-numeric: tabular-nums;
-}
-.source-title {
-    font-size: 0.8125rem;
-    color: var(--text);
-    line-height: 1.5;
-    font-weight: 400;
-}
-.source-file {
-    font-size: 0.69rem;
-    color: var(--text-muted);
-    margin-top: 0.15rem;
-    font-family: ui-monospace, 'SF Mono', monospace;
-    letter-spacing: -0.01em;
-}
-
-/* ── Status indicator ──────────────────────────────────────────── */
-.status-wrap {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.35rem 0.75rem;
-    background: var(--bg-chip);
-    border: 1px solid var(--border);
-    border-radius: 99px;
-    margin: 0.25rem 0;
-}
-.status-dot {
-    width: 6px;
-    height: 6px;
-    background: var(--text-sub);
-    border-radius: 50%;
-    flex-shrink: 0;
-    animation: pulse 1.4s ease-in-out infinite;
-}
-.status-text {
-    font-size: 0.78rem;
-    color: var(--text-sub);
-    font-weight: 400;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 0.4; transform: scale(0.9); }
-    50%       { opacity: 1;   transform: scale(1.1); }
-}
-
-/* ── Empty state ───────────────────────────────────────────────── */
-.empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 4rem 1rem 2rem;
-    gap: 0.5rem;
-    text-align: center;
-}
-.empty-icon {
-    font-size: 2rem;
-    margin-bottom: 0.5rem;
-    opacity: 0.5;
-}
-.empty-title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--text-sub);
-    letter-spacing: -0.01em;
-}
-.empty-hint {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    max-width: 320px;
-    line-height: 1.55;
-}
-.suggestion-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.45rem;
-    justify-content: center;
-    margin-top: 1.25rem;
-    max-width: 480px;
-}
-.chip {
-    font-size: 0.76rem;
-    color: var(--text-sub);
-    background: var(--bg-chip);
-    border: 1px solid var(--border);
-    border-radius: 99px;
-    padding: 0.35rem 0.75rem;
-    cursor: default;
-    transition: background 0.15s, color 0.15s;
-    line-height: 1.4;
-}
-.chip:hover {
-    background: var(--bg-chip-on);
-    color: var(--text);
-}
-
-/* ── Footer ────────────────────────────────────────────────────── */
-.app-footer {
-    text-align: center;
-    font-size: 0.68rem;
-    color: var(--text-muted);
-    padding: 0.75rem 0 0.25rem;
-    letter-spacing: 0.01em;
-}
-
-/* ── Scrollbar ─────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #484848; }
-
-/* ── Divider ───────────────────────────────────────────────────── */
-hr { border-color: var(--border-subtle) !important; }
-
-/* ── Mobile ────────────────────────────────────────────────────── */
-@media (max-width: 768px) {
-    .block-container { padding-top: 0 !important; }
-    .app-title { font-size: 0.85rem; }
-    .empty-state { padding: 2rem 1rem 1rem; }
-}
+  /* Spinner */
+  .status-text { color: #6c7280; font-size: 0.85rem; font-style: italic; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Password gate ───────────────────────────────────────────────────────────
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
 
-if not st.session_state.authenticated:
-    st.markdown("""
-    <div class="password-gate">
-        <div class="password-gate-card">
-            <span class="password-gate-icon">🐟</span>
-            <div class="password-gate-title">Yakima Fisheries Literature</div>
-            <div class="password-gate-subtitle">RAG-powered scientific literature search</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    password = st.text_input("Access key", type="password", placeholder="Enter access key…", label_visibility="collapsed")
-    if password == "yakima2026":
-        st.session_state.authenticated = True
-        st.rerun()
-    elif password:
-        st.markdown("<p style='font-size:0.78rem;color:#9b5555;text-align:center;margin-top:0.5rem;'>Incorrect access key</p>", unsafe_allow_html=True)
-    st.stop()
+# ── Password Gate ─────────────────────────────────────────────────────────────
 
-# ── Load resources ──────────────────────────────────────────────────────────
-@st.cache_resource
+def check_password() -> bool:
+    """Returns True once the correct password has been entered."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown('<div class="app-header"><p class="app-title">Yakima Fisheries Bot</p></div>', unsafe_allow_html=True)
+    st.markdown("#### Enter access password")
+
+    pw = st.text_input("Password", type="password", key="pw_input")
+    if st.button("Login"):
+        if pw == st.secrets.get("APP_PASSWORD", "yakima2026"):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+
+# ── Resource Loading (cached) ─────────────────────────────────────────────────
+
+@st.cache_resource(show_spinner=False)
 def load_resources():
-    client = chromadb.PersistentClient(path="./chroma_db")
-    collection = client.get_collection(name="yakima")
-    embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-    rerank_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-    api_key = st.secrets.get("ANTHROPIC_API_KEY") if hasattr(st, "secrets") else None
-    if not api_key:
-        import os
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-    anthropic = Anthropic(api_key=api_key)
-    with open("./bm25_index.pkl", "rb") as f:
-        bm25_data = pickle.load(f)
-    return collection, embed_model, rerank_model, anthropic, bm25_data
+    """Load all models and indexes once at startup."""
 
-collection, embed_model, rerank_model, anthropic, bm25_data = load_resources()
-bm25 = bm25_data["bm25"]
-bm25_texts = bm25_data["texts"]
-bm25_metadata = bm25_data["metadata"]
+    # ── Download from Hugging Face if not present locally ──────────────────
+    if not os.path.exists(CHROMA_DIR) or not os.path.exists(BM25_PATH):
+        hf_token  = st.secrets.get("HF_TOKEN", "")
+        hf_repo   = st.secrets.get("HF_REPO", "")
+        if hf_token and hf_repo:
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                repo_id=hf_repo,
+                repo_type="dataset",
+                local_dir=".",
+                token=hf_token,
+            )
+        else:
+            st.error(
+                "Database not found locally and HF_TOKEN / HF_REPO not set in secrets. "
+                "Run ingest.py first, or configure Hugging Face credentials."
+            )
+            st.stop()
 
-# ── System prompt ───────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are an expert fish biologist specializing in bull trout ecology and conservation 
-in the Yakima Basin. You are assisting USFWS biologists who need detailed, technical answers.
-
-When answering:
-- Cite sources using the full title and year provided in the source label, e.g. "Smith et al. (2001) 
-  found that..." or "(Jones & Brown, 1998)". Use author-style citations, not just filenames.
-- Note the age of information when relevant — flag when you're drawing on older studies (pre-2000) 
-  vs recent work, and highlight if findings have been updated or contradicted over time
-- Be specific and quantitative — include actual numbers, measurements, temperatures, distances, 
-  population counts, and dates from the literature when available
-- Synthesize across multiple sources when they agree or disagree — note contradictions explicitly
-- Use technical biological terminology appropriate for professional biologists
-- Structure longer answers with clear sections if the topic warrants it
-- If the excerpts don't contain enough to answer well, say exactly what is missing and suggest 
-  what kind of source might have it
-
-Do not give vague summaries. Give the kind of detailed answer a senior biologist would give 
-when briefing a colleague. Always ground your answer in the specific literature provided."""
-
-# ── Query expansion ─────────────────────────────────────────────────────────
-def expand_query(question, anthropic_client):
-    response = anthropic_client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=300,
-        messages=[{"role": "user", "content": f"""Generate 3 alternative search queries for this biology question to help find relevant scientific literature. 
-Return only the queries, one per line, no numbering or explanation.
-Question: {question}"""}]
+    # ── ChromaDB ───────────────────────────────────────────────────────────
+    embed_fn   = SentenceTransformerEmbeddingFunction(
+        model_name=EMBED_MODEL,
+        normalize_embeddings=True  # required for BGE models
     )
-    alternatives = response.content[0].text.strip().split('\n')
-    return [question] + [q.strip() for q in alternatives if q.strip()][:3]
+    chroma     = chromadb.PersistentClient(path=CHROMA_DIR)
+    collection = chroma.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
 
-# ── Hybrid retrieval ────────────────────────────────────────────────────────
-def hybrid_retrieve(queries, collection, embed_model, bm25, bm25_texts, bm25_metadata, n_vector=25, n_bm25=25):
-    seen_ids = set()
-    candidate_docs = []
-    candidate_metas = []
+    # ── BM25 ───────────────────────────────────────────────────────────────
+    with open(BM25_PATH, "rb") as f:
+        bm25_payload = pickle.load(f)
+    bm25          = bm25_payload["bm25"]
+    bm25_texts    = bm25_payload["texts"]
+    bm25_metadata = bm25_payload["metadata"]
 
+    # ── CrossEncoder ───────────────────────────────────────────────────────
+    reranker = CrossEncoder(RERANK_MODEL)
+
+    # ── Anthropic client ───────────────────────────────────────────────────
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+
+    return collection, bm25, bm25_texts, bm25_metadata, reranker, client
+
+
+# ── Pipeline Steps ────────────────────────────────────────────────────────────
+
+def expand_query(question: str, client: anthropic.Anthropic) -> list[str]:
+    """Step 1: Use Claude Haiku to generate 3 alternative search queries."""
+    prompt = (
+        f"Generate 3 alternative search queries for a fisheries literature database. "
+        f"Each query should use different terminology but retrieve relevant papers. "
+        f"Return ONLY the 3 queries, one per line, no numbering or extra text.\n\n"
+        f"Original question: {question}"
+    )
+    resp = client.messages.create(
+        model=HAIKU_MODEL,
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    lines = resp.content[0].text.strip().splitlines()
+    queries = [q.strip() for q in lines if q.strip()][:3]
+    return [question] + queries  # original + 3 alternatives = 4 total
+
+
+def vector_search(
+    queries: list[str],
+    collection,
+    top_k: int = VECTOR_TOP_K,
+) -> list[dict]:
+    """Step 2: Run vector search for each query, collect results."""
+    candidates = {}  # parent_id → result dict (dedup by parent)
     for q in queries:
-        q_embedding = embed_model.encode(q)
-        # ids are returned automatically, do not include in include list
+        # BGE models require this prefix for retrieval queries
+        prefixed_q = f"Represent this sentence for searching relevant passages: {q}"
         results = collection.query(
-            query_embeddings=[q_embedding.tolist()],
-            n_results=n_vector,
-            include=["documents", "metadatas"]
+            query_texts=[prefixed_q],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
         )
-        for doc, meta, doc_id in zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["ids"][0]
-        ):
-            parent_text = meta.get("parent_text", doc)
-            parent_id = meta.get("parent_id", doc_id)
-            if parent_id not in seen_ids:
-                seen_ids.add(parent_id)
-                candidate_docs.append(parent_text)
-                candidate_metas.append(meta)
+        docs      = results["documents"][0]
+        metas     = results["metadatas"][0]
+        distances = results["distances"][0]
 
-    tokens = queries[0].lower().split()
-    bm25_scores = bm25.get_scores(tokens)
-    top_bm25_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:n_bm25]
+        for doc, meta, dist in zip(docs, metas, distances):
+            pid = meta.get("parent_id", doc[:40])
+            if pid not in candidates:
+                candidates[pid] = {
+                    "parent_id":   pid,
+                    "parent_text": meta.get("parent_text", doc),
+                    "source":      meta.get("source", ""),
+                    "title":       meta.get("title", ""),
+                    "year":        meta.get("year", ""),
+                    "authors":     meta.get("authors", ""),
+                    "citation":    meta.get("citation", ""),
+                    "score":       1 - dist,
+                }
+    return list(candidates.values())
 
-    for idx in top_bm25_indices:
-        parent_id = bm25_metadata[idx]["parent_id"]
-        if parent_id not in seen_ids:
-            seen_ids.add(parent_id)
-            candidate_docs.append(bm25_texts[idx])
-            candidate_metas.append(bm25_metadata[idx])
 
-    return candidate_docs, candidate_metas
+def bm25_search(
+    question: str,
+    bm25,
+    bm25_texts: list[str],
+    bm25_metadata: list[dict],
+    top_k: int = BM25_TOP_K,
+) -> list[dict]:
+    """Step 3: BM25 keyword search on the original question."""
+    tokens = question.lower().split()
+    scores = bm25.get_scores(tokens)
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
 
-# ── Header ──────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="app-header">
-    <div class="app-header-left">
-        <div class="app-header-icon">🐟</div>
-        <div>
-            <div class="app-title">Yakima Fisheries Literature</div>
-            <div class="app-subtitle">Bull trout ecology &amp; conservation · Yakima Basin</div>
-        </div>
-    </div>
-    <div class="app-model-badge">claude-sonnet</div>
-</div>
-""", unsafe_allow_html=True)
+    results = []
+    for i in top_indices:
+        if scores[i] <= 0:
+            continue
+        meta = bm25_metadata[i]
+        results.append({
+            "parent_id":   meta.get("parent_id", f"bm25_{i}"),
+            "parent_text": bm25_texts[i],
+            "source":      meta.get("source", ""),
+            "title":       meta.get("title", ""),
+            "year":        meta.get("year", ""),
+            "authors":     meta.get("authors", ""),
+            "citation":    meta.get("citation", ""),
+            "score":       float(scores[i]),
+        })
+    return results
 
-# ── Chat ─────────────────────────────────────────────────────────────────────
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "source_history" not in st.session_state:
-    st.session_state.source_history = []
 
-# Empty state
-if not st.session_state.messages:
-    st.markdown("""
-    <div class="empty-state">
-        <div class="empty-icon">🔬</div>
-        <div class="empty-title">Ask the literature</div>
-        <div class="empty-hint">Search across scientific studies on bull trout, habitat, temperature, hydrology, and more.</div>
-        <div class="suggestion-chips">
-            <span class="chip">Bull trout thermal tolerances</span>
-            <span class="chip">Spawning habitat requirements</span>
-            <span class="chip">Population trends post-2000</span>
-            <span class="chip">Migration barriers</span>
-            <span class="chip">Stream temperature effects</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+def deduplicate(vector_results: list[dict], bm25_results: list[dict]) -> list[dict]:
+    """Step 4: Merge vector + BM25 results, deduplicate by parent_id."""
+    seen = {}
+    for r in vector_results + bm25_results:
+        pid = r["parent_id"]
+        if pid not in seen:
+            seen[pid] = r
+    return list(seen.values())
 
-for i, message in enumerate(st.session_state.messages):
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if message["role"] == "assistant" and i // 2 < len(st.session_state.source_history):
-            sources = st.session_state.source_history[i // 2]
-            if sources:
-                n = len(sources)
-                with st.expander(f"  {n} source{'s' if n != 1 else ''} retrieved"):
-                    for s in sources:
-                        title = (s['title'][:90] + '…') if len(s['title']) > 90 else s['title']
-                        display = title or s['source']
+
+def rerank(
+    question: str,
+    candidates: list[dict],
+    reranker: CrossEncoder,
+    top_n: int = RERANK_TOP_N,
+) -> list[dict]:
+    """Step 5: CrossEncoder reranking — keep top_n by relevance score."""
+    if not candidates:
+        return []
+    pairs  = [(question, c["parent_text"]) for c in candidates]
+    scores = reranker.predict(pairs)
+    scores = [float(s) for s in scores]  # ensure plain floats
+
+    ranked = sorted(
+        zip(scores, candidates),
+        key=lambda x: x[0],
+        reverse=True,
+    )
+    return [c for _, c in ranked[:top_n]]
+
+
+def build_context(chunks: list[dict]) -> str:
+    """Format reranked chunks into a numbered context block for Claude."""
+    parts = []
+    for i, c in enumerate(chunks, 1):
+        # Use full citation if available, otherwise fall back to title/year/source
+        citation = c.get("citation", "")
+        if not citation:
+            citation = f"{c['title']} ({c['year']}) [{c['source']}]" if c['title'] else c['source']
+        header = f"[{i}] {citation}"
+        parts.append(f"{header}\n{c['parent_text']}")
+    return "\n\n---\n\n".join(parts)
+
+
+def generate_answer(
+    question: str,
+    context: str,
+    history: list[dict],
+    client: anthropic.Anthropic,
+    use_web: bool = False,
+    web_snippets: str = "",
+) -> str:
+    """Step 6: Generate a cited answer using Claude Sonnet with prompt caching."""
+    system = WEB_SEARCH_SYSTEM if use_web else SYSTEM_PROMPT
+
+    literature_block = (
+        f"<literature>\n{context}\n</literature>"
+    )
+    web_block = (
+        f"\n\n<web_results>\n{web_snippets}\n</web_results>"
+        if use_web and web_snippets else ""
+    )
+
+    # Build message history (conversation memory)
+    messages = []
+    for turn in history:
+        messages.append({"role": turn["role"], "content": turn["content"]})
+
+    # Current turn — literature context as first user message in this turn
+    user_content = (
+        f"{literature_block}{web_block}\n\n"
+        f"Question: {question}"
+    )
+    messages.append({"role": "user", "content": user_content})
+
+    resp = client.beta.messages.create(
+        model=SONNET_MODEL,
+        max_tokens=6000,
+        system=[
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=messages,
+        betas=["prompt-caching-2024-07-31"],
+    )
+    return resp.content[0].text
+
+
+def web_search_snippets(question: str) -> str:
+    """Fetch brief web search results using DuckDuckGo (no API key needed)."""
+    try:
+        import urllib.parse, urllib.request, html
+        q  = urllib.parse.quote_plus(question + " fisheries")
+        url = f"https://html.duckduckgo.com/html/?q={q}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = r.read().decode("utf-8", errors="ignore")
+
+        # Extract plain-text snippets from result divs
+        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL)
+        clean = []
+        for s in snippets[:5]:
+            s = re.sub(r"<[^>]+>", "", s)
+            s = html.unescape(s).strip()
+            if s:
+                clean.append(s)
+        return "\n\n".join(clean)
+    except Exception:
+        return ""
+
+
+# ── Main App ──────────────────────────────────────────────────────────────────
+
+def main():
+    if not check_password():
+        return
+
+    # ── Load resources ────────────────────────────────────────────────────
+    with st.spinner("Loading models and database…"):
+        collection, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
+
+    # ── Session state ─────────────────────────────────────────────────────
+    if "messages" not in st.session_state:
+        st.session_state.messages = []   # full chat history
+    if "history" not in st.session_state:
+        st.session_state.history  = []   # Claude message history (role/content)
+
+    # ── Header ────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="app-header">'
+        '<p class="app-title">Yakima Fisheries Bot</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Render chat history ───────────────────────────────────────────────
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            st.markdown(
+                f'<div class="user-msg">🧑‍🔬 {msg["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="assistant-msg">{msg["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+            # Source cards
+            if msg.get("sources"):
+                with st.expander(f"📄 Sources ({len(msg['sources'])} papers)", expanded=False):
+                    for src in msg["sources"]:
+                        citation = src.get("citation", "")
+                        title    = src.get("title", src["source"])
+                        authors  = src.get("authors", "")
+                        year     = src.get("year", "")
                         st.markdown(
-                            f"<div class='source-row'>"
-                            f"<span class='source-badge'>{s['year'] or '—'}</span>"
-                            f"<div><div class='source-title'>{display}</div>"
-                            f"<div class='source-file'>{s['source']}</div></div>"
-                            f"</div>",
-                            unsafe_allow_html=True
+                            f'<div class="source-card">'
+                            f'<span class="source-title">{title}</span>'
+                            f'<span class="source-year"> ({year})</span>'
+                            + (f'<br><span style="color:#9ca3af;font-size:0.78rem">{authors}</span>' if authors else '')
+                            + (f'<br><span style="color:#6b7280;font-size:0.74rem;font-style:italic">{citation}</span>' if citation and citation != title else '')
+                            + f'<br><span style="color:#4b5563;font-size:0.72rem">{src["source"]}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
                         )
 
-# ── Bottom input area ────────────────────────────────────────────────────────
-use_web = st.toggle("🌐  Web search", value=False, key="web_toggle")
+    # ── Input area ────────────────────────────────────────────────────────
+    st.divider()
 
-if question := st.chat_input("Ask about Yakima fisheries…"):
+    col1, col2 = st.columns([5, 1])
+    with col1:
+        question = st.text_input(
+            "Ask a question about Yakima Basin fisheries…",
+            key="question_input",
+            label_visibility="collapsed",
+            placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
+        )
+    with col2:
+        use_web = st.toggle("🌐 Web", value=False, help="Supplement with live web search results")
+
+    ask_btn = st.button("Ask →", use_container_width=False)
+
+    if not (ask_btn and question.strip()):
+        if not st.session_state.messages:
+            st.markdown(
+                '<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">'
+                'Connor Cunningham 2026'
+                '</p>',
+                unsafe_allow_html=True,
+            )
+        return
+
+    question = question.strip()
+
+    # ── Run pipeline ──────────────────────────────────────────────────────
     st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
 
-    with st.chat_message("assistant"):
-        status = st.empty()
+    with st.status("Searching literature…", expanded=True) as status:
 
-        status.markdown("<div class='status-wrap'><div class='status-dot'></div><span class='status-text'>Expanding query…</span></div>", unsafe_allow_html=True)
-        recent_history = st.session_state.messages[-4:]
-        conversation_context = ""
-        if len(recent_history) > 1:
-            conversation_context = "\n".join([
-                f"{m['role'].upper()}: {m['content'][:300]}"
-                for m in recent_history[:-1]
-            ])
-        contextual_question = question
-        if conversation_context:
-            contextual_question = f"Previous conversation:\n{conversation_context}\n\nCurrent question: {question}"
-        queries = expand_query(contextual_question, anthropic)
+        st.write("🔍 Expanding query with Claude Haiku…")
+        queries = expand_query(question, client)
 
-        status.markdown("<div class='status-wrap'><div class='status-dot'></div><span class='status-text'>Retrieving literature…</span></div>", unsafe_allow_html=True)
-        candidate_docs, candidate_metas = hybrid_retrieve(
-            queries, collection, embed_model,
-            bm25, bm25_texts, bm25_metadata
-        )
+        st.write(f"📚 Vector search ({len(queries)} queries × {VECTOR_TOP_K} results)…")
+        vec_results = vector_search(queries, collection)
 
-        status.markdown("<div class='status-wrap'><div class='status-dot'></div><span class='status-text'>Reranking results…</span></div>", unsafe_allow_html=True)
-        pairs = [[question, doc] for doc in candidate_docs]
-        scores = rerank_model.predict(pairs)
-        scores = [float(s) for s in scores]
-        ranked = sorted(zip(scores, candidate_docs, candidate_metas), key=lambda x: x[0], reverse=True)
-        top = ranked[:12]
+        st.write(f"🔤 BM25 keyword search…")
+        bm25_results = bm25_search(question, bm25, bm25_texts, bm25_meta)
 
-        status.markdown("<div class='status-wrap'><div class='status-dot'></div><span class='status-text'>Generating answer…</span></div>", unsafe_allow_html=True)
+        st.write("🔗 Deduplicating candidates…")
+        candidates = deduplicate(vec_results, bm25_results)
+        st.write(f"   → {len(candidates)} unique candidates")
 
-        context_parts = []
-        used_sources = []
-        for score, doc, meta in top:
-            title = meta.get('title', '')
-            year = meta.get('year', 'unknown')
-            source = meta['source']
-            label = f"{title} ({year}) [{source}]" if title else f"{source} ({year})"
-            context_parts.append(f"[Source: {label}]\n{doc}")
-            if not any(s['source'] == source for s in used_sources):
-                used_sources.append({"source": source, "title": title, "year": year})
-        context = "\n\n---\n\n".join(context_parts)
+        st.write(f"⚖️  Reranking with CrossEncoder → keeping top {RERANK_TOP_N}…")
+        top_chunks = rerank(question, candidates, reranker)
 
-        claude_messages = []
-        for m in st.session_state.messages[:-1]:
-            claude_messages.append({"role": m["role"], "content": m["content"]})
-        claude_messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Literature excerpts:\n\n{context}", "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": f"Question: {question}"}
-            ]
-        })
-
-        tools = []
         if use_web:
-            tools.append({"type": "web_search_20250305", "name": "web_search"})
+            st.write("🌐 Fetching web results…")
+            snippets = web_search_snippets(question)
+        else:
+            snippets = ""
 
-        api_kwargs = dict(
-            model="claude-sonnet-4-6",
-            max_tokens=6000,
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            messages=claude_messages
+        st.write("✍️  Generating answer with Claude Sonnet…")
+        context = build_context(top_chunks)
+        answer  = generate_answer(
+            question,
+            context,
+            st.session_state.history,
+            client,
+            use_web=use_web,
+            web_snippets=snippets,
         )
-        if tools:
-            api_kwargs["tools"] = tools
+        status.update(label="Done!", state="complete", expanded=False)
 
-        response = anthropic.messages.create(**api_kwargs)
-        answer = ""
-        for block in response.content:
-            if hasattr(block, "text"):
-                answer += block.text
+    # ── Save to history ───────────────────────────────────────────────────
+    # Keep Claude history for conversation memory (role/content only)
+    st.session_state.history.append({"role": "user", "content": question})
+    st.session_state.history.append({"role": "assistant", "content": answer})
 
-        status.empty()
-        st.markdown(answer)
+    # Deduplicate sources for display
+    seen_src = {}
+    for c in top_chunks:
+        pid = c["parent_id"]
+        if pid not in seen_src:
+            seen_src[pid] = {
+                "title":    c["title"],
+                "year":     c["year"],
+                "authors":  c.get("authors", ""),
+                "citation": c.get("citation", ""),
+                "source":   c["source"],
+            }
+    sources = list(seen_src.values())
 
-        n = len(used_sources)
-        with st.expander(f"  {n} source{'s' if n != 1 else ''} retrieved"):
-            for s in used_sources:
-                title = (s['title'][:90] + '…') if len(s['title']) > 90 else s['title']
-                display = title or s['source']
-                st.markdown(
-                    f"<div class='source-row'>"
-                    f"<span class='source-badge'>{s['year'] or '—'}</span>"
-                    f"<div><div class='source-title'>{display}</div>"
-                    f"<div class='source-file'>{s['source']}</div></div>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
+    st.session_state.messages.append({
+        "role":    "assistant",
+        "content": answer,
+        "sources": sources,
+    })
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-    st.session_state.source_history.append(used_sources)
+    st.rerun()
 
-# ── Footer ───────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="app-footer">
-    Connor Cunningham &nbsp;·&nbsp; 2026 &nbsp;·&nbsp; USFWS Yakima Basin
-</div>
-""", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
