@@ -33,7 +33,7 @@ st.set_page_config(
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-COLLECTION_NAME  = "yakima_fisheries"
+COLLECTION_NAME  = "yakima"
 CHROMA_DIR       = "./chroma_db"
 BM25_PATH        = "./bm25_index.pkl"
 EMBED_MODEL      = "sentence-transformers/all-MiniLM-L6-v2"
