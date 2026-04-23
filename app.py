@@ -260,9 +260,22 @@ def load_resources():
             st.stop()
 
     # ── ChromaDB ───────────────────────────────────────────────────────────
-    embed_fn   = SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
-    chroma     = chromadb.PersistentClient(path=CHROMA_DIR)
-    collection = chroma.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
+    embed_fn = SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
+    chroma   = chromadb.PersistentClient(path=CHROMA_DIR)
+
+    try:
+        collection = chroma.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
+    except Exception as e:
+        # Surface a clear diagnostic instead of the raw chromadb error.
+        existing = [c.name for c in chroma.list_collections()]
+        st.error(
+            f"ChromaDB collection '{COLLECTION_NAME}' not found at {CHROMA_DIR}.\n\n"
+            f"Collections present: {existing or '(none)'}\n"
+            f"Underlying error: {e}\n\n"
+            f"If the collection list is empty, the download from Hugging Face "
+            f"likely didn't include the chroma_db/ folder — check HF_REPO contents."
+        )
+        st.stop()
 
     # ── BM25 ───────────────────────────────────────────────────────────────
     with open(BM25_PATH, "rb") as f:
