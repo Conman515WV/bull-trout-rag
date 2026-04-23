@@ -210,7 +210,14 @@ st.markdown("""
 # ── Password Gate ─────────────────────────────────────────────────────────────
 
 def check_password() -> bool:
-    """Returns True once the correct password has been entered."""
+    """Returns True once the correct password has been entered.
+
+    If no APP_PASSWORD secret is set, auth is skipped entirely so anyone
+    with the URL can use the app.
+    """
+    expected = st.secrets.get("APP_PASSWORD", "")
+    if not expected:
+        return True  # no password configured → open access
     if st.session_state.get("authenticated"):
         return True
 
@@ -219,7 +226,7 @@ def check_password() -> bool:
 
     pw = st.text_input("Password", type="password", key="pw_input")
     if st.button("Login"):
-        if pw == st.secrets.get("APP_PASSWORD", "yakima2026"):
+        if pw == expected:
             st.session_state["authenticated"] = True
             st.rerun()
         else:
@@ -423,7 +430,7 @@ def generate_answer(
     )
     messages.append({"role": "user", "content": user_content})
 
-    resp = client.beta.messages.create(
+    resp = client.messages.create(
         model=SONNET_MODEL,
         max_tokens=6000,
         system=[
@@ -434,7 +441,6 @@ def generate_answer(
             }
         ],
         messages=messages,
-        betas=["prompt-caching-2024-07-31"],
     )
     return resp.content[0].text
 
@@ -465,12 +471,14 @@ def web_search_snippets(question: str) -> str:
 # ── Main App ──────────────────────────────────────────────────────────────────
 
 def main():
-    if not check_password():
-        return
-
-    # ── Load resources ────────────────────────────────────────────────────
+    # Kick off resource loading first so the cache warms while the user
+    # is entering their password (or immediately if no password is set).
+    # After the first cold start, @st.cache_resource makes this a no-op.
     with st.spinner("Loading models and database…"):
         collection, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
+
+    if not check_password():
+        return
 
     # ── Session state ─────────────────────────────────────────────────────
     if "messages" not in st.session_state:
@@ -542,33 +550,15 @@ def main():
     # ── Run pipeline ──────────────────────────────────────────────────────
     st.session_state.messages.append({"role": "user", "content": question})
 
-    with st.status("Searching literature…", expanded=True) as status:
-
-        st.write("🔍 Expanding query with Claude Haiku…")
-        queries = expand_query(question, client)
-
-        st.write(f"📚 Vector search ({len(queries)} queries × {VECTOR_TOP_K} results)…")
-        vec_results = vector_search(queries, collection)
-
-        st.write(f"🔤 BM25 keyword search…")
-        bm25_results = bm25_search(question, bm25, bm25_texts, bm25_meta)
-
-        st.write("🔗 Deduplicating candidates…")
-        candidates = deduplicate(vec_results, bm25_results)
-        st.write(f"   → {len(candidates)} unique candidates")
-
-        st.write(f"⚖️  Reranking with CrossEncoder → keeping top {RERANK_TOP_N}…")
-        top_chunks = rerank(question, candidates, reranker)
-
-        if use_web:
-            st.write("🌐 Fetching web results…")
-            snippets = web_search_snippets(question)
-        else:
-            snippets = ""
-
-        st.write("✍️  Generating answer with Claude Sonnet…")
-        context = build_context(top_chunks)
-        answer  = generate_answer(
+    with st.spinner("Thinking…"):
+        queries       = expand_query(question, client)
+        vec_results   = vector_search(queries, collection)
+        bm25_results  = bm25_search(question, bm25, bm25_texts, bm25_meta)
+        candidates    = deduplicate(vec_results, bm25_results)
+        top_chunks    = rerank(question, candidates, reranker)
+        snippets      = web_search_snippets(question) if use_web else ""
+        context       = build_context(top_chunks)
+        answer        = generate_answer(
             question,
             context,
             st.session_state.history,
@@ -576,7 +566,6 @@ def main():
             use_web=use_web,
             web_snippets=snippets,
         )
-        status.update(label="Done!", state="complete", expanded=False)
 
     # ── Save to history ───────────────────────────────────────────────────
     # Keep Claude history for conversation memory (role/content only)
