@@ -20,8 +20,7 @@ import time
 
 import streamlit as st
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-from sentence_transformers import CrossEncoder
+from sentence_transformers import CrossEncoder, SentenceTransformer
 import anthropic
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
@@ -36,7 +35,7 @@ st.set_page_config(
 COLLECTION_NAME  = "yakima"
 CHROMA_DIR       = "./chroma_db"
 BM25_PATH        = "./bm25_index.pkl"
-EMBED_MODEL      = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_MODEL      = "BAAI/bge-large-en-v1.5"  # must match ingestheavy.py — 1024-dim
 RERANK_MODEL     = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 VECTOR_TOP_K     = 25
 BM25_TOP_K       = 25
@@ -260,20 +259,19 @@ def load_resources():
             st.stop()
 
     # ── ChromaDB ───────────────────────────────────────────────────────────
-    embed_fn = SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
-    chroma   = chromadb.PersistentClient(path=CHROMA_DIR)
+    # The persisted collection was created without an explicit embedding function,
+    # so we load it with no embedding function and embed queries ourselves.
+    chroma    = chromadb.PersistentClient(path=CHROMA_DIR)
+    embed_model = SentenceTransformer(EMBED_MODEL)
 
     try:
-        collection = chroma.get_collection(name=COLLECTION_NAME, embedding_function=embed_fn)
+        collection = chroma.get_collection(name=COLLECTION_NAME)
     except Exception as e:
-        # Surface a clear diagnostic instead of the raw chromadb error.
         existing = [c.name for c in chroma.list_collections()]
         st.error(
             f"ChromaDB collection '{COLLECTION_NAME}' not found at {CHROMA_DIR}.\n\n"
             f"Collections present: {existing or '(none)'}\n"
-            f"Underlying error: {e}\n\n"
-            f"If the collection list is empty, the download from Hugging Face "
-            f"likely didn't include the chroma_db/ folder — check HF_REPO contents."
+            f"Underlying error: {e}"
         )
         st.stop()
 
@@ -290,7 +288,7 @@ def load_resources():
     # ── Anthropic client ───────────────────────────────────────────────────
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
-    return collection, bm25, bm25_texts, bm25_metadata, reranker, client
+    return collection, embed_model, bm25, bm25_texts, bm25_metadata, reranker, client
 
 
 # ── Pipeline Steps ────────────────────────────────────────────────────────────
@@ -316,13 +314,22 @@ def expand_query(question: str, client: anthropic.Anthropic) -> list[str]:
 def vector_search(
     queries: list[str],
     collection,
+    embed_model: SentenceTransformer,
     top_k: int = VECTOR_TOP_K,
 ) -> list[dict]:
     """Step 2: Run vector search for each query, collect results."""
+    # Embed all queries in one batch (faster than one-by-one).
+    # normalize_embeddings=True matches ingestheavy.py so cosine similarity works correctly.
+    embeddings = embed_model.encode(
+        queries,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    ).tolist()
+
     candidates = {}  # parent_id → result dict (dedup by parent)
-    for q in queries:
+    for q, emb in zip(queries, embeddings):
         results = collection.query(
-            query_texts=[q],
+            query_embeddings=[emb],
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
@@ -488,7 +495,7 @@ def main():
     # is entering their password (or immediately if no password is set).
     # After the first cold start, @st.cache_resource makes this a no-op.
     with st.spinner("Loading models and database…"):
-        collection, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
+        collection, embed_model, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
 
     if not check_password():
         return
@@ -565,7 +572,7 @@ def main():
 
     with st.spinner("Thinking…"):
         queries       = expand_query(question, client)
-        vec_results   = vector_search(queries, collection)
+        vec_results   = vector_search(queries, collection, embed_model)
         bm25_results  = bm25_search(question, bm25, bm25_texts, bm25_meta)
         candidates    = deduplicate(vec_results, bm25_results)
         top_chunks    = rerank(question, candidates, reranker)
@@ -580,27 +587,4 @@ def main():
             web_snippets=snippets,
         )
 
-    # ── Save to history ───────────────────────────────────────────────────
-    # Keep Claude history for conversation memory (role/content only)
-    st.session_state.history.append({"role": "user", "content": question})
-    st.session_state.history.append({"role": "assistant", "content": answer})
-
-    # Deduplicate sources for display
-    seen_src = {}
-    for c in top_chunks:
-        pid = c["parent_id"]
-        if pid not in seen_src:
-            seen_src[pid] = {"title": c["title"], "year": c["year"], "source": c["source"]}
-    sources = list(seen_src.values())
-
-    st.session_state.messages.append({
-        "role":    "assistant",
-        "content": answer,
-        "sources": sources,
-    })
-
-    st.rerun()
-
-
-if __name__ == "__main__":
-    main()
+    # ── Save to history 
