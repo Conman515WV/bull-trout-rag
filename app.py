@@ -15,13 +15,28 @@ Run locally:
 
 import os
 import re
+import sys
 import pickle
 import time
+import traceback
+
+# Log startup progress to stderr so it shows up in Streamlit Cloud runtime logs.
+print("[startup] python booting...", flush=True)
 
 import streamlit as st
-import chromadb
-from sentence_transformers import CrossEncoder, SentenceTransformer
-import anthropic
+print("[startup] streamlit imported", flush=True)
+
+try:
+    import chromadb
+    print("[startup] chromadb imported", flush=True)
+    from sentence_transformers import CrossEncoder, SentenceTransformer
+    print("[startup] sentence_transformers imported", flush=True)
+    import anthropic
+    print("[startup] anthropic imported", flush=True)
+except Exception as e:
+    print(f"[startup] IMPORT FAILED: {e}", flush=True)
+    traceback.print_exc()
+    raise
 
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
@@ -238,31 +253,40 @@ def check_password() -> bool:
 @st.cache_resource(show_spinner=False)
 def load_resources():
     """Load all models and indexes once at startup."""
+    print("[load] starting load_resources()", flush=True)
 
     # ── Download from Hugging Face if not present locally ──────────────────
     if not os.path.exists(CHROMA_DIR) or not os.path.exists(BM25_PATH):
+        print(f"[load] {CHROMA_DIR} or {BM25_PATH} missing, downloading from HF...", flush=True)
         hf_token  = st.secrets.get("HF_TOKEN", "")
         hf_repo   = st.secrets.get("HF_REPO", "")
         if hf_token and hf_repo:
             from huggingface_hub import snapshot_download
+            print(f"[load] snapshot_download from {hf_repo}...", flush=True)
             snapshot_download(
                 repo_id=hf_repo,
                 repo_type="dataset",
                 local_dir=".",
                 token=hf_token,
             )
+            print("[load] snapshot_download complete", flush=True)
         else:
             st.error(
                 "Database not found locally and HF_TOKEN / HF_REPO not set in secrets. "
                 "Run ingest.py first, or configure Hugging Face credentials."
             )
             st.stop()
+    else:
+        print("[load] chroma_db and bm25 already present locally", flush=True)
 
     # ── ChromaDB ───────────────────────────────────────────────────────────
     # The persisted collection was created without an explicit embedding function,
     # so we load it with no embedding function and embed queries ourselves.
-    chroma    = chromadb.PersistentClient(path=CHROMA_DIR)
+    print("[load] opening ChromaDB PersistentClient...", flush=True)
+    chroma = chromadb.PersistentClient(path=CHROMA_DIR)
+    print("[load] loading SentenceTransformer (BGE-large, ~1.3GB)...", flush=True)
     embed_model = SentenceTransformer(EMBED_MODEL)
+    print("[load] SentenceTransformer ready", flush=True)
 
     try:
         collection = chroma.get_collection(name=COLLECTION_NAME)
@@ -276,17 +300,22 @@ def load_resources():
         st.stop()
 
     # ── BM25 ───────────────────────────────────────────────────────────────
+    print("[load] loading BM25 pickle...", flush=True)
     with open(BM25_PATH, "rb") as f:
         bm25_payload = pickle.load(f)
     bm25          = bm25_payload["bm25"]
     bm25_texts    = bm25_payload["texts"]
     bm25_metadata = bm25_payload["metadata"]
+    print(f"[load] BM25 loaded ({len(bm25_texts)} docs)", flush=True)
 
     # ── CrossEncoder ───────────────────────────────────────────────────────
+    print("[load] loading CrossEncoder reranker...", flush=True)
     reranker = CrossEncoder(RERANK_MODEL)
+    print("[load] CrossEncoder ready", flush=True)
 
     # ── Anthropic client ───────────────────────────────────────────────────
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    print("[load] load_resources() done", flush=True)
 
     return collection, embed_model, bm25, bm25_texts, bm25_metadata, reranker, client
 
@@ -587,4 +616,26 @@ def main():
             web_snippets=snippets,
         )
 
-    # ── Save to history 
+    # ── Save to history ───────────────────────────────────────────────────
+    st.session_state.history.append({"role": "user", "content": question})
+    st.session_state.history.append({"role": "assistant", "content": answer})
+
+    # Deduplicate sources for display
+    seen_src = {}
+    for c in top_chunks:
+        pid = c["parent_id"]
+        if pid not in seen_src:
+            seen_src[pid] = {"title": c["title"], "year": c["year"], "source": c["source"]}
+    sources = list(seen_src.values())
+
+    st.session_state.messages.append({
+        "role":    "assistant",
+        "content": answer,
+        "sources": sources,
+    })
+
+    st.rerun()
+
+
+if __name__ == "__main__":
+    main()
