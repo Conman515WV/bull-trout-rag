@@ -235,6 +235,19 @@ st.markdown("""
 
   /* Spinner */
   .status-text { color: #6c7280; font-size: 0.85rem; font-style: italic; }
+
+  /* Source excerpt — shown when a source card expander is opened */
+  .source-excerpt {
+    background: #2b2b2b;
+    border-left: 3px solid #e87722;
+    padding: 0.7rem 0.9rem;
+    color: #d5d5d5;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    border-radius: 0 4px 4px 0;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -597,16 +610,31 @@ def main():
                 f'<div class="assistant-msg">{msg["content"]}</div>',
                 unsafe_allow_html=True,
             )
-            # Source cards
+            # Source cards — each source is its own expander that reveals
+            # the exact paragraph (parent_text) the answer drew from.
             if msg.get("sources"):
-                with st.expander(f"📄 Sources ({len(msg['sources'])} papers)", expanded=False):
-                    for src in msg["sources"]:
+                st.markdown(
+                    f'<p style="color:#999999;font-size:0.85rem;margin:0.5rem 0 0.25rem 0;">'
+                    f'Sources ({len(msg["sources"])} passages) — click any to view the exact excerpt'
+                    f'</p>',
+                    unsafe_allow_html=True,
+                )
+                for i, src in enumerate(msg["sources"], 1):
+                    header = (
+                        f"[{i}] {src.get('title') or src.get('source', 'Untitled')}"
+                        f"  ({src.get('year', 'n.d.')})"
+                    )
+                    with st.expander(header, expanded=False):
+                        filename = src.get("source", "")
+                        excerpt  = src.get("parent_text", "") or "(no excerpt available)"
+                        if filename:
+                            st.markdown(
+                                f'<p style="color:#999999;font-size:0.75rem;margin:0 0 0.5rem 0;">'
+                                f'File: <code>{filename}</code></p>',
+                                unsafe_allow_html=True,
+                            )
                         st.markdown(
-                            f'<div class="source-card">'
-                            f'<span class="source-title">{src["title"]}</span>'
-                            f'<span class="source-year">{src["year"]}</span>'
-                            f'<br><span style="color:#4b5563;font-size:0.75rem">{src["source"]}</span>'
-                            f'</div>',
+                            f'<div class="source-excerpt">{excerpt}</div>',
                             unsafe_allow_html=True,
                         )
 
@@ -662,12 +690,18 @@ def main():
     st.session_state.history.append({"role": "user", "content": question})
     st.session_state.history.append({"role": "assistant", "content": answer})
 
-    # Deduplicate sources for display
+    # Deduplicate sources for display — keep parent_text so the UI can
+    # expand each source card and show the exact paragraph used.
     seen_src = {}
     for c in top_chunks:
         pid = c["parent_id"]
         if pid not in seen_src:
-            seen_src[pid] = {"title": c["title"], "year": c["year"], "source": c["source"]}
+            seen_src[pid] = {
+                "title":       c.get("title", ""),
+                "year":        c.get("year", ""),
+                "source":      c.get("source", ""),
+                "parent_text": c.get("parent_text", ""),
+            }
     sources = list(seen_src.values())
 
     st.session_state.messages.append({
