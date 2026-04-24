@@ -134,8 +134,26 @@ Your responses should reflect the level of detail and rigor expected in a techni
 WEB_SEARCH_SYSTEM = """\
 You are a fisheries science assistant. The user's question has been supplemented
 with recent web search results in addition to the literature library.
-Clearly distinguish between findings from the literature vs. web sources.
-Always cite sources inline.
+
+PRIORITY WEB SOURCE — Yakipedia (ybfwrb.org/yakipedia):
+- Yakipedia is the curated MediaWiki maintained by the Yakima Basin Fish and
+  Wildlife Recovery Board (YBFWRB). It is the authoritative, up-to-date
+  reference for bull trout populations, FMO habitat areas, reservoirs
+  (Rimrock, Bumping, Cle Elum, Kachess, Keechelus), tributaries, management
+  actions, basin acronyms, and agency programs in the Yakima Basin.
+- When any web snippet comes from ybfwrb.org, treat it as the highest-authority
+  web source. Prefer it over general web results when they conflict, unless
+  the general result is a peer-reviewed paper or a more recent official agency
+  document.
+- When citing Yakipedia inline, use the format:
+    (Yakipedia: <Page Title>, YBFWRB 2025)
+- If Yakipedia and the PDF literature disagree on a number or date, surface the
+  disagreement explicitly rather than silently picking one — Yakipedia is often
+  more current, the literature is often more rigorously cited.
+
+General rules:
+- Clearly distinguish between findings from the literature vs. web sources.
+- Always cite sources inline.
 """
 
 # ── CSS / Styling ─────────────────────────────────────────────────────────────
@@ -495,26 +513,50 @@ def generate_answer(
 
 
 def web_search_snippets(question: str) -> str:
-    """Fetch brief web search results using DuckDuckGo (no API key needed)."""
-    try:
-        import urllib.parse, urllib.request, html
-        q  = urllib.parse.quote_plus(question + " fisheries")
-        url = f"https://html.duckduckgo.com/html/?q={q}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            body = r.read().decode("utf-8", errors="ignore")
+    """
+    Fetch brief web search results using DuckDuckGo (no API key needed).
 
-        # Extract plain-text snippets from result divs
-        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL)
-        clean = []
-        for s in snippets[:5]:
-            s = re.sub(r"<[^>]+>", "", s)
-            s = html.unescape(s).strip()
-            if s:
-                clean.append(s)
-        return "\n\n".join(clean)
-    except Exception:
-        return ""
+    Yakipedia (ybfwrb.org) is queried first as the authoritative Yakima
+    Basin source; general fisheries results are appended below, clearly
+    labeled so the LLM can weight them appropriately.
+    """
+    import urllib.parse, urllib.request, html
+
+    def _fetch(query: str, limit: int = 5) -> list[str]:
+        try:
+            url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote_plus(query)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                body = r.read().decode("utf-8", errors="ignore")
+            raw = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', body, re.DOTALL)
+            out = []
+            for s in raw[:limit]:
+                s = re.sub(r"<[^>]+>", "", s)
+                s = html.unescape(s).strip()
+                if s:
+                    out.append(s)
+            return out
+        except Exception:
+            return []
+
+    # 1) Yakipedia-first pass (authoritative YBFWRB wiki)
+    yaki = _fetch(f"site:ybfwrb.org {question}", limit=5)
+
+    # 2) General fisheries pass
+    general = _fetch(f"{question} fisheries", limit=5)
+
+    parts = []
+    if yaki:
+        parts.append(
+            "[Yakipedia — ybfwrb.org — AUTHORITATIVE YBFWRB SOURCE]\n"
+            + "\n\n".join(yaki)
+        )
+    if general:
+        parts.append(
+            "[General web results]\n"
+            + "\n\n".join(general)
+        )
+    return "\n\n---\n\n".join(parts)
 
 
 # ── Main App ──────────────────────────────────────────────────────────────────
