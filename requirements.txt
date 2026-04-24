@@ -1,13 +1,15 @@
 # Yakima Fisheries Bot — runtime dependencies only
-# chromadb 1.x to match the DB schema we built locally.
-# protobuf pinned to 4.25.x to satisfy chromadb 1.5's opentelemetry deps.
+# CPU-only torch to avoid 2GB of unused CUDA libs on Streamlit Cloud.
+# protobuf pinned for chromadb 1.5's opentelemetry descriptors.
+
+--extra-index-url https://download.pytorch.org/whl/cpu
 
 streamlit==1.37.1
 anthropic==0.49.0
 chromadb==1.5.5
 sentence-transformers==2.7.0
 transformers==4.44.2
-torch==2.3.1
+torch==2.3.1+cpu
 huggingface_hub==0.23.4
 rank-bm25==0.2.2
 numpy==1.26.4
