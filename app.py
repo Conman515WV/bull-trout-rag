@@ -20,7 +20,7 @@ import pickle
 import time
 import traceback
 
-from typing import Tuple
+from typing import Tuple, List
 
 # Log startup progress to stderr so it shows up in Streamlit Cloud runtime logs.
 print("[startup] python booting...", flush=True)
