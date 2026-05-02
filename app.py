@@ -641,24 +641,31 @@ def main():
     # ── Input area ────────────────────────────────────────────────────────
     st.divider()
 
-    # Display the web toggle outside of where st.chat_input handles submission
-    use_web_toggled = st.toggle("🌐 Web", value=False, help="Supplement with live web search results", label_visibility="collapsed")
+    # ── Input area (form enables Enter-key submission) ─────────────────────
+    with st.form("question_form", clear_on_submit=True):
+        use_web = st.toggle(
+            "🌐 Web", value=False,
+            help="Supplement with live web search results",
+        )
+        question = st.text_input(
+            "Ask a question about Yakima Basin fisheries…",
+            key="question_input",
+            label_visibility="collapsed",
+            placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
+        )
+        ask_btn = st.form_submit_button("Ask →")
 
-    question = st.chat_input("Ask a question about Yakima Basin fisheries…")
-
-    if not question:
-        # If chat_input is empty, display the footer if no messages are present.
+    if not (ask_btn and question.strip()):
         if not st.session_state.messages:
             st.markdown(
-                """<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">
-                Connor Cunningham 2026
-                </p>""",
+                '<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">'
+                'Connor Cunningham 2026'
+                '</p>',
                 unsafe_allow_html=True,
             )
         return
-    
-    # If question is submitted, use the state of the web toggle.
-    use_web = use_web_toggled # Variable to be used in generate_answer
+
+    question = question.strip()
 
     # ── Run pipeline ──────────────────────────────────────────────────────
     st.session_state.messages.append({"role": "user", "content": question})
