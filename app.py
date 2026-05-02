@@ -20,6 +20,8 @@ import pickle
 import time
 import traceback
 
+from typing import Tuple
+
 # Log startup progress to stderr so it shows up in Streamlit Cloud runtime logs.
 print("[startup] python booting...", flush=True)
 
@@ -353,22 +355,54 @@ def load_resources():
 
 # ── Pipeline Steps ────────────────────────────────────────────────────────────
 
-def expand_query(question: str, client: anthropic.Anthropic) -> list[str]:
-    """Step 1: Use Claude Haiku to generate 3 alternative search queries."""
-    prompt = (
+def expand_query(question: str, client: anthropic.Anthropic) -> Tuple[List[str], List[str]]:
+    """Step 1: Use Claude Haiku to generate 3 alternative search queries and 4 HyDE answers."""
+    # Generate 3 alternative questions
+    alt_questions_prompt = (
         f"Generate 3 alternative search queries for a fisheries literature database. "
         f"Each query should use different terminology but retrieve relevant papers. "
         f"Return ONLY the 3 queries, one per line, no numbering or extra text.\n\n"
         f"Original question: {question}"
     )
-    resp = client.messages.create(
+    alt_questions_resp = client.messages.create(
         model=HAIKU_MODEL,
         max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": alt_questions_prompt}],
     )
-    lines = resp.content[0].text.strip().splitlines()
-    queries = [q.strip() for q in lines if q.strip()][:3]
-    return [question] + queries  # original + 3 alternatives = 4 total
+    alt_q_lines = alt_questions_resp.content[0].text.strip().splitlines()
+    alt_queries = [q.strip() for q in alt_q_lines if q.strip()][:3]
+    all_questions = [question] + alt_queries
+
+    # Generate HyDE answers for all 4 questions
+    hyde_prompt_parts = []
+    for i, q in enumerate(all_questions, 1):
+        hyde_prompt_parts.append(f"{i}. {q}")
+
+    hyde_prompt = (
+        f"For each of the following {len(all_questions)} questions, write a 2-3 sentence passage "
+        f"that reads like a results or discussion section from a peer-reviewed fisheries paper. "
+        f"Use technical fisheries terminology. Return ONLY the {len(all_questions)} passages, "
+        f"numbered 1 through {len(all_questions)}, with no preamble and no extra text.\n\n"
+        + "\n".join(hyde_prompt_parts)
+    )
+
+    hyde_resp = client.messages.create(
+        model=HAIKU_MODEL,
+        max_tokens=800,
+        messages=[{"role": "user", "content": hyde_prompt}],
+    )
+
+    # Parse HyDE answers
+    raw_hyde_answers = hyde_resp.content[0].text.strip()
+    parsed_hyde_answers = re.split(r'^\d+\.\s*', raw_hyde_answers, flags=re.MULTILINE)
+    hyde_answers = [ans.strip() for ans in parsed_hyde_answers if ans.strip()]
+
+    # Fallback if parsing fails
+    if len(hyde_answers) < len(all_questions):
+        print(f"Warning: HyDE answer parsing failed, expected {len(all_questions)} but got {len(hyde_answers)}. Falling back to all_questions for HyDE.")
+        hyde_answers = all_questions
+
+    return all_questions, hyde_answers
 
 
 def vector_search(
@@ -671,8 +705,8 @@ def main():
     st.session_state.messages.append({"role": "user", "content": question})
 
     with st.spinner("Thinking…"):
-        queries       = expand_query(question, client)
-        vec_results   = vector_search(queries, collection, embed_model)
+        all_questions, hyde_answers = expand_query(question, client)
+        vec_results   = vector_search(hyde_answers, collection, embed_model)
         bm25_results  = bm25_search(question, bm25, bm25_texts, bm25_meta)
         candidates    = deduplicate(vec_results, bm25_results)
         top_chunks    = rerank(question, candidates, reranker)
