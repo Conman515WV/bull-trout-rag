@@ -14,3 +14,6 @@ huggingface_hub==0.23.4
 rank-bm25==0.2.2
 numpy==1.26.4
 protobuf==4.25.5
+networkx
+pyvis
+rapidfuzz

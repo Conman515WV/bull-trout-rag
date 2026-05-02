@@ -606,25 +606,22 @@ def web_search_snippets(question: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-# ── Main App ──────────────────────────────────────────────────────────────────
+# ── Main App — Page Navigation ────────────────────────────────────────────────
 
-def main():
-    # Kick off resource loading first so the cache warms while the user
-    # is entering their password (or immediately if no password is set).
-    # After the first cold start, @st.cache_resource makes this a no-op.
-    with st.spinner("Loading models and database…"):
-        collection, embed_model, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
-
-    if not check_password():
-        return
-
-    # ── Session state ─────────────────────────────────────────────────────
+def chat_page(client, collection, embed_model, bm25, bm25_texts, bm25_meta, reranker):
+    """Existing chat interface — no pipeline logic changed."""
+    # Session state
     if "messages" not in st.session_state:
-        st.session_state.messages = []   # full chat history
+        st.session_state.messages = []
     if "history" not in st.session_state:
-        st.session_state.history  = []   # Claude message history (role/content)
+        st.session_state.history = []
 
-    # ── Header ────────────────────────────────────────────────────────────
+    # Pre-fill query from graph navigation
+    prefill = st.session_state.get("graph_query", "")
+    if st.session_state.pop("graph_navigate_to_chat", False):
+        st.session_state["graph_query"] = ""
+
+    # Header
     st.markdown(
         '<div class="app-header">'
         '<p class="app-title">Yakima Fisheries Bot</p>'
@@ -632,7 +629,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # ── Render chat history ───────────────────────────────────────────────
+    # Render chat history
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             st.markdown(
@@ -644,8 +641,6 @@ def main():
                 f'<div class="assistant-msg">{msg["content"]}</div>',
                 unsafe_allow_html=True,
             )
-            # Source cards — each source is its own expander that reveals
-            # the exact paragraph (parent_text) the answer drew from.
             if msg.get("sources"):
                 st.markdown(
                     f'<p style="color:#999999;font-size:0.85rem;margin:0.5rem 0 0.25rem 0;">'
@@ -660,7 +655,7 @@ def main():
                     )
                     with st.expander(header, expanded=False):
                         filename = src.get("source", "")
-                        excerpt  = src.get("parent_text", "") or "(no excerpt available)"
+                        excerpt = src.get("parent_text", "") or "(no excerpt available)"
                         if filename:
                             st.markdown(
                                 f'<p style="color:#999999;font-size:0.75rem;margin:0 0 0.5rem 0;">'
@@ -672,10 +667,9 @@ def main():
                             unsafe_allow_html=True,
                         )
 
-    # ── Input area ────────────────────────────────────────────────────────
     st.divider()
 
-    # ── Input area (form enables Enter-key submission) ─────────────────────
+    # Input form
     with st.form("question_form", clear_on_submit=True):
         use_web = st.toggle(
             "🌐 Web", value=False,
@@ -683,6 +677,7 @@ def main():
         )
         question = st.text_input(
             "Ask a question about Yakima Basin fisheries…",
+            value=prefill if prefill else "",
             key="question_input",
             label_visibility="collapsed",
             placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
@@ -701,51 +696,62 @@ def main():
 
     question = question.strip()
 
-    # ── Run pipeline ──────────────────────────────────────────────────────
     st.session_state.messages.append({"role": "user", "content": question})
 
     with st.spinner("Thinking…"):
         all_questions, hyde_answers = expand_query(question, client)
-        vec_results   = vector_search(hyde_answers, collection, embed_model)
-        bm25_results  = bm25_search(question, bm25, bm25_texts, bm25_meta)
-        candidates    = deduplicate(vec_results, bm25_results)
-        top_chunks    = rerank(question, candidates, reranker)
-        snippets      = web_search_snippets(question) if use_web else ""
-        context       = build_context(top_chunks)
-        answer        = generate_answer(
-            question,
-            context,
-            st.session_state.history,
-            client,
-            use_web=use_web,
-            web_snippets=snippets,
+        vec_results = vector_search(hyde_answers, collection, embed_model)
+        bm25_results = bm25_search(question, bm25, bm25_texts, bm25_meta)
+        candidates = deduplicate(vec_results, bm25_results)
+        top_chunks = rerank(question, candidates, reranker)
+        snippets = web_search_snippets(question) if use_web else ""
+        context = build_context(top_chunks)
+        answer = generate_answer(
+            question, context, st.session_state.history, client,
+            use_web=use_web, web_snippets=snippets,
         )
 
-    # ── Save to history ───────────────────────────────────────────────────
     st.session_state.history.append({"role": "user", "content": question})
     st.session_state.history.append({"role": "assistant", "content": answer})
 
-    # Deduplicate sources for display — keep parent_text so the UI can
-    # expand each source card and show the exact paragraph used.
     seen_src = {}
     for c in top_chunks:
         pid = c["parent_id"]
         if pid not in seen_src:
             seen_src[pid] = {
-                "title":       c.get("title", ""),
-                "year":        c.get("year", ""),
-                "source":      c.get("source", ""),
+                "title": c.get("title", ""),
+                "year": c.get("year", ""),
+                "source": c.get("source", ""),
                 "parent_text": c.get("parent_text", ""),
             }
     sources = list(seen_src.values())
 
     st.session_state.messages.append({
-        "role":    "assistant",
+        "role": "assistant",
         "content": answer,
         "sources": sources,
     })
 
     st.rerun()
+
+
+def main():
+    with st.spinner("Loading models and database…"):
+        collection, embed_model, bm25, bm25_texts, bm25_meta, reranker, client = load_resources()
+
+    if not check_password():
+        return
+
+    # ── Page Navigation ─────────────────────────────────────────────────
+    page = st.sidebar.radio("Navigate", ["💬 Chat", "🔗 Graph Explorer"], index=0, label_visibility="collapsed")
+
+    if "Graph" in page:
+        from graph_page import run as run_graph
+        st.session_state["page"] = "graph"
+        run_graph()
+    else:
+        st.session_state["page"] = "chat"
+        chat_page(client, collection, embed_model, bm25, bm25_texts, bm25_meta, reranker)
 
 
 if __name__ == "__main__":
