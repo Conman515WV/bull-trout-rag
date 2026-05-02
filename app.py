@@ -164,7 +164,7 @@ st.markdown("""
   html, body, [class*="css"] {
     font-family: 'IBM Plex Sans', sans-serif;
   }
-  .stApp { background-color: #2b2b2b; color: #e0e0e0; }
+
 
   /* Center content in a readable column */
   .block-container {
@@ -641,30 +641,28 @@ def main():
     # ── Input area ────────────────────────────────────────────────────────
     st.divider()
 
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        question = st.text_input(
-            "Ask a question about Yakima Basin fisheries…",
-            key="question_input",
-            label_visibility="collapsed",
-            placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
-        )
-    with col2:
-        use_web = st.toggle("🌐 Web", value=False, help="Supplement with live web search results")
+    # Display the web toggle outside of where st.chat_input handles submission
+    use_web_toggled = st.toggle("🌐 Web", value=False, help="Supplement with live web search results", label_visibility="collapsed")
 
-    ask_btn = st.button("Ask →", use_container_width=False)
+    question = st.chat_input(
+        "Ask a question about Yakima Basin fisheries…",
+        key="question_input",
+        placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
+    )
 
-    if not (ask_btn and question.strip()):
+    if not question:
+        # If chat_input is empty, display the footer if no messages are present.
         if not st.session_state.messages:
             st.markdown(
-                '<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">'
-                'Connor Cunningham 2026'
-                '</p>',
+                """<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">
+                Connor Cunningham 2026
+                </p>""",
                 unsafe_allow_html=True,
             )
         return
-
-    question = question.strip()
+    
+    # If question is submitted, use the state of the web toggle.
+    use_web = use_web_toggled # Variable to be used in generate_answer
 
     # ── Run pipeline ──────────────────────────────────────────────────────
     st.session_state.messages.append({"role": "user", "content": question})
