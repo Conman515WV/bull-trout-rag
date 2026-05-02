@@ -644,11 +644,7 @@ def main():
     # Display the web toggle outside of where st.chat_input handles submission
     use_web_toggled = st.toggle("🌐 Web", value=False, help="Supplement with live web search results", label_visibility="collapsed")
 
-    question = st.chat_input(
-        "Ask a question about Yakima Basin fisheries…",
-        key="question_input",
-        placeholder="e.g. What are the primary habitat requirements for bull trout spawning?",
-    )
+    question = st.chat_input("Ask a question about Yakima Basin fisheries…")
 
     if not question:
         # If chat_input is empty, display the footer if no messages are present.
