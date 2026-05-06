@@ -194,6 +194,7 @@ st.markdown("""
   /* Chat messages */
   .user-msg {
     background: #3a3a3a;
+    color: #e0e0e0;
     border-left: 3px solid #e87722;
     padding: 0.8rem 1rem;
     border-radius: 0 6px 6px 0;
@@ -201,6 +202,7 @@ st.markdown("""
   }
   .assistant-msg {
     background: #333333;
+    color: #e0e0e0;
     border-left: 3px solid #c45e0a;
     padding: 0.8rem 1rem;
     border-radius: 0 6px 6px 0;
