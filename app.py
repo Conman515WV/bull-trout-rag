@@ -209,6 +209,22 @@ st.markdown("""
     margin-bottom: 0.5rem;
   }
 
+  .user-msg h1, .user-msg h2, .user-msg h3,
+  .user-msg h4, .user-msg h5, .user-msg h6,
+  .assistant-msg h1, .assistant-msg h2, .assistant-msg h3,
+  .assistant-msg h4, .assistant-msg h5, .assistant-msg h6 {
+    color: #ffffff !important;
+  }
+  .user-msg p, .assistant-msg p {
+    color: #ffffff !important;
+  }
+  .user-msg li, .assistant-msg li {
+    color: #ffffff !important;
+  }
+  .user-msg table, .assistant-msg table {
+    color: #ffffff !important;
+  }
+
   /* Source cards */
   .source-card {
     background: #3a3a3a;
