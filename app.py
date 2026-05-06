@@ -245,6 +245,57 @@ st.markdown("""
     color: #e0e0e0 !important;
     font-family: 'IBM Plex Sans', sans-serif !important;
   }
+  .stTextInput > div > div > input::placeholder {
+    color: #ffffff !important;
+    opacity: 1 !important;
+  }
+  div[data-testid="stTextInput"] input::placeholder,
+  .stTextInput input::placeholder,
+  st-text-input input::placeholder,
+  .st-emotion-cache-1x8nf2f input::placeholder {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+  }
+
+  /* Override Streamlit default label text color in light mode */
+  .stTextInput > label {
+    color: #ffffff !important;
+  }
+  .stTextInput label[data-baseweb="base-input"] {
+    color: #ffffff !important;
+  }
+
+  /* Force all input placeholders to be white regardless of theme */
+  input::placeholder {
+    color: #ffffff !important;
+    opacity: 1 !important;
+  }
+
+  /* Override Streamlit theme CSS variables for light mode */
+  :root {
+    --text-color: #ffffff !important;
+  }
+
+  /* Target form inputs specifically */
+  div[data-testid="stForm"] input::placeholder {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    opacity: 1 !important;
+  }
+
+  /* Streamlit BaseWeb input wrapper */
+  .st-emotion-cache-1v0mbdj {
+    color: #ffffff !important;
+  }
+
+  /* Target all Streamlit text inputs and forms */
+  .st-emotion-cache-1x8cf0d input::placeholder,
+  .st-emotion-cache-13qz829 input::placeholder {
+    color: #ffffff !important;
+    opacity: 1 !important;
+  }
+
   .stButton > button {
     background-color: #e87722;
     color: white;
