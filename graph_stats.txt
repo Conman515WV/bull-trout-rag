@@ -1,0 +1,26 @@
+Total nodes: 432
+Total edges: 12977
+
+Top 10 highest-weight edges (most co-occurring pairs):
+  'pre-spawning' <-> 'bull trout'  weight=119
+  'Yakima River' <-> 'Washington'  weight=107
+  'Yakima River' <-> 'Yakima'  weight=104
+  'bull trout' <-> 'USFWS'  weight=101
+  'Washington' <-> 'bull trout'  weight=96
+  'Mount Adams' <-> 'Washington'  weight=95
+  'rivers' <-> 'Washington'  weight=95
+  'bull trout' <-> 'U.S.D.I. Fish and Wildlife Service'  weight=94
+  'Yakima River' <-> 'rivers'  weight=93
+  'Yakima' <-> 'Washington'  weight=92
+
+Top 10 most connected nodes:
+  'Yakima River'  degree=349  category=location  papers=139
+  'rivers'  degree=346  category=location  papers=123
+  'Washington'  degree=346  category=other  papers=148
+  'Yakima'  degree=326  category=other  papers=124
+  'Columbia River dams'  degree=320  category=infrastructure  papers=117
+  'bull trout'  degree=316  category=species  papers=193
+  'pre-spawning'  degree=311  category=other  papers=138
+  'streams'  degree=307  category=location  papers=121
+  'Mount Adams'  degree=306  category=infrastructure  papers=116
+  'reservoirs'  degree=299  category=location  papers=107
