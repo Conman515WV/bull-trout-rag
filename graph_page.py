@@ -103,10 +103,10 @@ def build_pyvis_html(G, node_summaries, selected_node=None, category_filter=None
     else:
         nodes_to_show = set(G.nodes())
 
-    edges_to_show = set()
+    edges_to_show = []
     for u, v, data in G.edges(data=True):
         if u in nodes_to_show and v in nodes_to_show:
-            edges_to_show.add((u, v, data))
+            edges_to_show.append((u, v, data))
 
     # Add nodes
     for node in nodes_to_show:
