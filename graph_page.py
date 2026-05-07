@@ -1,41 +1,46 @@
 """
-graph_page.py — Phase 4: Graph Explorer UI for Streamlit
-=========================================================
-Renders the fisheries knowledge graph as an interactive PyVis network.
+graph_page.py — Phase 4: Fisheries Entity Wiki
+================================================
+Replaces the PyVis graph visualization with a searchable wiki-style
+reference tool. Each entity gets its own page showing:
+  - Category and paper count
+  - Haiku-written literature summary
+  - Related entities (neighbors in the graph, sorted by edge weight)
+  - Full list of papers mentioning this entity
 
-KNOWN LIMITATIONS:
-1. PyVis click events cannot be relayed back to Python through st.components.v1.html
-   because the HTML runs in a sandboxed iframe. Node selection is instead handled
-   via a Streamlit selectbox — when the user picks a node from the dropdown,
-   the graph re-renders showing the ego network.
-2. Large graphs (hundreds of nodes) render slowly in PyVis. If total nodes > 150,
-   the default view shows a filtered subset (user must pick a category first)
-   rather than the full graph. This is flagged here and enforced in render_graph().
+Node selection is handled via search + selectbox (no JS click events needed).
 
-Run order for building graph data:
-  python extract_entities.py && python build_graph.py && python generate_summaries.py
+KNOWN LIMITATION: PyVis click events cannot be relayed back to Python through
+st.components.v1.html. Wiki approach sidesteps this entirely.
 """
 
 import os
 import pickle
 import streamlit as st
 import networkx as nx
-from pyvis.network import Network
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────────────────────────────
 GRAPH_PATH = "graph.pkl"
 SUMMARIES_PATH = "node_summaries.pkl"
-PYVIS_HEIGHT = "700"
-LARGE_GRAPH_THRESHOLD = 150  # nodes; above this, default to filtered view
 
 CATEGORY_COLORS = {
-    "species": "#e74c3c",       # red
-    "location": "#3498db",      # blue
-    "infrastructure": "#f39c12", # orange
-    "management": "#2ecc71",    # green
-    "monitoring": "#9b59b6",    # purple
-    "agency": "#1abc9c",        # teal
-    "other": "#95a5a6",         # gray
+    "species":        "#e74c3c",
+    "location":       "#3498db",
+    "infrastructure": "#f39c12",
+    "management":     "#2ecc71",
+    "monitoring":     "#9b59b6",
+    "agency":         "#1abc9c",
+    "other":          "#95a5a6",
+}
+
+CATEGORY_ICONS = {
+    "species":        "🐟",
+    "location":       "📍",
+    "infrastructure": "🏗️",
+    "management":     "📋",
+    "monitoring":     "📡",
+    "agency":         "🏛️",
+    "other":          "🔹",
 }
 
 
@@ -55,91 +60,133 @@ def load_summaries():
         return pickle.load(f)
 
 
-def get_category_stats(G):
-    """Return count of nodes per category."""
-    stats = {}
+def category_badge(category):
+    color = CATEGORY_COLORS.get(category, "#95a5a6")
+    icon = CATEGORY_ICONS.get(category, "🔹")
+    return (
+        f'<span style="background:{color};color:white;padding:2px 10px;'
+        f'border-radius:12px;font-size:0.8rem;font-weight:600;">'
+        f'{icon} {category.capitalize()}</span>'
+    )
+
+
+def render_entity_page(entity, G, summaries):
+    """Render the full wiki page for a selected entity."""
+    node_data = G.nodes[entity]
+    category = node_data.get("category", "other")
+    papers = node_data.get("papers", [])
+    degree = G.degree(entity)
+    summary = summaries.get(entity, "")
+
+    # Header
+    st.markdown(f"## {CATEGORY_ICONS.get(category, '🔹')} {entity}")
+    st.markdown(category_badge(category), unsafe_allow_html=True)
+    st.markdown(f"**{len(papers)} papers** · **{degree} connections**")
+    st.divider()
+
+    col_left, col_right = st.columns([3, 2])
+
+    with col_left:
+        # Literature summary
+        st.markdown("### 📖 Literature Summary")
+        if summary:
+            st.info(summary)
+        else:
+            st.caption("No summary available for this entity.")
+
+        # Papers
+        st.markdown(f"### 📄 Papers ({len(papers)})")
+        for p in sorted(papers):
+            # Strip .pdf extension for cleaner display
+            display = p.replace(".pdf", "").replace("_", " ")
+            st.markdown(f"- `{display}`")
+
+    with col_right:
+        # Related entities sorted by edge weight
+        st.markdown("### 🔗 Related Entities")
+        neighbors = [
+            (nb, G[entity][nb].get("weight", 1), G.nodes[nb].get("category", "other"))
+            for nb in G.neighbors(entity)
+        ]
+        neighbors.sort(key=lambda x: x[1], reverse=True)
+
+        for nb, weight, nb_cat in neighbors[:30]:
+            color = CATEGORY_COLORS.get(nb_cat, "#95a5a6")
+            icon = CATEGORY_ICONS.get(nb_cat, "🔹")
+            st.markdown(
+                f'<div style="padding:4px 0;border-bottom:1px solid #2a2a2a;">'
+                f'<span style="color:{color}">{icon}</span> '
+                f'**{nb}** '
+                f'<span style="color:#888;font-size:0.8rem">({weight} papers)</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            # Button to navigate to that entity
+            if st.button(f"→ View {nb}", key=f"nav_{nb}", use_container_width=False):
+                st.session_state["selected_entity"] = nb
+                st.rerun()
+
+        if len(neighbors) > 30:
+            st.caption(f"... and {len(neighbors) - 30} more connections")
+
+    # Ask in chat button
+    st.divider()
+    if st.button(f"💬 Ask about '{entity}' in chat", use_container_width=True):
+        st.session_state["graph_query"] = entity
+        st.session_state["graph_navigate_to_chat"] = True
+        st.rerun()
+
+
+def render_index(G, summaries, search_query, category_filter):
+    """Render the entity index / browse view."""
+    st.markdown("### 📚 Entity Index")
+
+    # Build filtered node list
+    nodes = []
     for node, data in G.nodes(data=True):
         cat = data.get("category", "other")
-        stats[cat] = stats.get(cat, 0) + 1
-    return stats
+        if category_filter and category_filter != "All" and cat != category_filter:
+            continue
+        if search_query and search_query.lower() not in node.lower():
+            continue
+        nodes.append((node, data, G.degree(node)))
 
+    # Sort by degree (most connected first)
+    nodes.sort(key=lambda x: x[2], reverse=True)
 
-def get_top_nodes(G, n=30):
-    """Get top N nodes by degree (most connections)."""
-    degrees = sorted(G.degree(), key=lambda x: x[1], reverse=True)
-    return [node for node, deg in degrees[:n]]
+    st.caption(f"Showing {len(nodes)} entities")
 
+    # Display as cards in a grid
+    cols_per_row = 2
+    for i in range(0, len(nodes), cols_per_row):
+        row_nodes = nodes[i:i + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for col, (node, data, degree) in zip(cols, row_nodes):
+            with col:
+                cat = data.get("category", "other")
+                color = CATEGORY_COLORS.get(cat, "#95a5a6")
+                icon = CATEGORY_ICONS.get(cat, "🔹")
+                papers = data.get("papers", [])
+                summary = summaries.get(node, "")
+                summary_snippet = summary[:120] + "..." if len(summary) > 120 else summary
 
-def build_pyvis_html(G, node_summaries, selected_node=None, category_filter=None, node_limit=None):
-    """
-    Build a PyVis network HTML string.
-    If selected_node is set, show only ego network (node + neighbors).
-    If category_filter is set, show only nodes of that category (plus their neighbors
-    if selected_node is also set).
-    If node_limit is set and selected_node is None, show only top N nodes.
-    """
-    net = Network(height=f"{PYVIS_HEIGHT}px", width="100%", bgcolor="#1a1a2e",
-                  font_color="#ffffff", directed=False)
-
-    # Physics config (Barnes-Hut)
-    net.barnes_hut(gravity=-80000, central_gravity=0.3, spring_length=250,
-                   spring_strength=0.001, damping=0.09, overlap=0)
-
-    # Determine which nodes to show
-    if selected_node and G.has_node(selected_node):
-        # Ego network: node + immediate neighbors
-        ego_nodes = set(G.neighbors(selected_node))
-        ego_nodes.add(selected_node)
-        if category_filter:
-            ego_nodes = {n for n in ego_nodes
-                         if G.nodes[n].get("category", "other") == category_filter
-                         or n == selected_node}
-        nodes_to_show = ego_nodes
-    elif category_filter:
-        nodes_to_show = {n for n in G.nodes()
-                         if G.nodes[n].get("category", "other") == category_filter}
-    elif node_limit:
-        nodes_to_show = set(get_top_nodes(G, node_limit))
-    else:
-        nodes_to_show = set(G.nodes())
-
-    edges_to_show = []
-    for u, v, data in G.edges(data=True):
-        if u in nodes_to_show and v in nodes_to_show:
-            edges_to_show.append((u, v, data))
-
-    # Add nodes
-    for node in nodes_to_show:
-        data = G.nodes[node]
-        degree = G.degree(node)
-        category = data.get("category", "other")
-        color = CATEGORY_COLORS.get(category, "#95a5a6")
-        # Scale node size: min 10, max ~50 based on degree
-        size = 10 + min(degree * 3, 40)
-
-        # Tooltip shows summary (if available) and paper count
-        summary = node_summaries.get(node, "")
-        papers = data.get("papers", [])
-        tooltip = f"<b>{node}</b><br>Category: {category}<br>Papers: {len(papers)}"
-        if summary:
-            tooltip += f"<br><br>{summary[:200]}..."
-
-        net.add_node(node, label=node, title=tooltip, color=color,
-                     size=size, font={"size": 14, "color": "#ffffff"})
-
-    # Add edges
-    for u, v, data in edges_to_show:
-        weight = data.get("weight", 1)
-        # Scale edge width: weight * 2, min 1, max 15
-        width = min(max(weight * 2, 1), 15)
-        opacity = min(0.3 + weight * 0.1, 0.9)
-        net.add_edge(u, v, width=width, color=f"rgba(255,255,255,{opacity})")
-
-    return net.generate_html()
+                st.markdown(
+                    f'<div style="border:1px solid {color};border-radius:8px;'
+                    f'padding:12px;margin-bottom:8px;background:#1a1a1a;">'
+                    f'<div style="font-weight:700;font-size:1rem;">{icon} {node}</div>'
+                    f'<div style="color:{color};font-size:0.75rem;margin:4px 0;">'
+                    f'{cat.capitalize()} · {len(papers)} papers · {degree} connections</div>'
+                    f'<div style="color:#aaa;font-size:0.8rem;">{summary_snippet}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button("View →", key=f"view_{node}", use_container_width=True):
+                    st.session_state["selected_entity"] = node
+                    st.rerun()
 
 
 def run():
-    """Main graph explorer page — called from st.navigation."""
+    """Main wiki page — called from app.py navigation."""
     G = load_graph()
     if G is None:
         st.error("📂 Graph not found. Build the graph first by running:")
@@ -148,102 +195,54 @@ def run():
 
     summaries = load_summaries()
 
-    st.markdown("### 🔗 Fisheries Knowledge Graph Explorer")
+    # ── Top bar ────────────────────────────────────────────────────────────────
+    st.markdown("### 🐟 Yakima Fisheries Knowledge Base")
 
-    # ── Filters row ────────────────────────────────────────────────────────
-    col1, col2 = st.columns([2, 1])
+    col1, col2, col3 = st.columns([3, 2, 1])
     with col1:
-        all_nodes = sorted(G.nodes())
-        search_query = st.text_input("🔍 Search nodes by name...", key="graph_search")
-    with col2:
-        cat_stats = get_category_stats(G)
-        categories = ["All"] + sorted(cat_stats.keys())
-        cat_filter_choice = st.selectbox("🏷️ Filter by category", categories, key="graph_cat_filter")
-
-    category_filter = None if cat_filter_choice == "All" else cat_filter_choice
-
-    # ── Node selector (replaces JS click events — see module docstring) ───
-    # Pre-filter available nodes based on category
-    available_nodes = all_nodes[:]
-    if category_filter:
-        available_nodes = [n for n in all_nodes
-                           if G.nodes[n].get("category", "other") == category_filter]
-
-    # If search query, further filter
-    if search_query:
-        available_nodes = [n for n in available_nodes
-                           if search_query.lower() in n.lower()]
-
-    selected_node = st.selectbox(
-        "📌 Select a node to view its ego network",
-        ["Full Graph"] + available_nodes,
-        index=0,
-        key="graph_node_select",
-    )
-
-    ego_node = None if selected_node == "Full Graph" else selected_node
-
-    # Determine if full graph is too large
-    total_nodes = G.number_of_nodes()
-    show_all = ego_node is None and category_filter is None
-    node_limit = None
-    if show_all and total_nodes > LARGE_GRAPH_THRESHOLD:
-        st.warning(
-            f"⚠️ Full graph has {total_nodes} nodes — showing top {LARGE_GRAPH_THRESHOLD} "
-            f"most-connected by default for performance. Use the category filter or search "
-            f"to view specific subsets."
+        search_query = st.text_input(
+            "Search entities...", 
+            key="wiki_search",
+            placeholder="e.g. bull trout, Yakima River, USFWS...",
+            label_visibility="collapsed",
         )
-        node_limit = LARGE_GRAPH_THRESHOLD
+    with col2:
+        categories = ["All"] + sorted(set(
+            d.get("category", "other") for _, d in G.nodes(data=True)
+        ))
+        category_filter = st.selectbox(
+            "Filter by category", categories, key="wiki_cat_filter",
+            label_visibility="collapsed",
+        )
+    with col3:
+        if st.button("← Back to Index", use_container_width=True):
+            st.session_state.pop("selected_entity", None)
+            st.rerun()
 
-    # ── Render graph ──────────────────────────────────────────────────────
-    html = build_pyvis_html(G, summaries, selected_node=ego_node,
-                            category_filter=category_filter, node_limit=node_limit)
-    st.components.v1.html(html, height=int(PYVIS_HEIGHT) + 20, scrolling=True)
+    st.divider()
 
-    # ── Info panel (below graph) ──────────────────────────────────────────
-    if ego_node and G.has_node(ego_node):
-        st.divider()
-        col_left, col_right = st.columns([2, 1])
+    # ── Stats row ──────────────────────────────────────────────────────────────
+    if "selected_entity" not in st.session_state:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Entities", G.number_of_nodes())
+        c2.metric("Total Connections", G.number_of_edges())
+        c3.metric("Papers Indexed", len(set(
+            p for _, d in G.nodes(data=True) for p in d.get("papers", [])
+        )))
+        c4.metric("With Summaries", sum(1 for n in G.nodes() if summaries.get(n)))
 
-        with col_left:
-            node_data = G.nodes[ego_node]
-            summary = summaries.get(ego_node, "")
-            st.subheader(f"📋 {ego_node}")
-            st.caption(f"Category: {node_data.get('category', 'other').capitalize()} | "
-                       f"Degree: {G.degree(ego_node)} | "
-                       f"Papers: {len(node_data.get('papers', []))}")
+    # ── Route: entity page or index ────────────────────────────────────────────
+    # Check if search selects a single exact match
+    if search_query:
+        exact = [n for n in G.nodes() if n.lower() == search_query.lower()]
+        if exact:
+            st.session_state["selected_entity"] = exact[0]
 
-            if summary:
-                st.markdown("#### Literature Summary")
-                st.info(summary)
-            else:
-                st.caption("No summary available for this node.")
-
-            # Papers list
-            papers = node_data.get("papers", [])
-            if papers:
-                st.markdown(f"#### Papers mentioning this entity ({len(papers)})")
-                for p in papers:
-                    st.markdown(f"📄 `{p}`")
-
-        with col_right:
-            st.markdown("#### Neighbors")
-            neighbors = sorted(G.neighbors(ego_node))
-            for nb in neighbors:
-                nb_cat = G.nodes[nb].get("category", "other")
-                nb_color = CATEGORY_COLORS.get(nb_cat, "#95a5a6")
-                weight = G[ego_node][nb].get("weight", 1)
-                st.markdown(
-                    f"<span style='color:{nb_color}'>●</span> "
-                    f"**{nb}** (w={weight})",
-                    unsafe_allow_html=True,
-                )
-
-            st.markdown("---")
-            if st.button("💬 Ask about this in chat", use_container_width=True):
-                st.session_state["graph_query"] = ego_node
-                st.session_state["graph_navigate_to_chat"] = True
-                st.rerun()
+    selected = st.session_state.get("selected_entity")
+    if selected and G.has_node(selected):
+        render_entity_page(selected, G, summaries)
+    else:
+        render_index(G, summaries, search_query, category_filter)
 
 
 if __name__ == "__main__":
