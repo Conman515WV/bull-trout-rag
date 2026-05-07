@@ -1,41 +1,112 @@
 """
-extract_entities.py — Phase 1: Entity Extraction from ChromaDB
-===============================================================
-Queries ChromaDB directly (no PDF reads), extracts named entities via Haiku
-per parent chunk, then runs fuzzy normalization across all raw entities using
-rapidfuzz token_sort_ratio (threshold = 88).
+build_graph.py — Phase 2: Graph Build from Normalized Entities
+==============================================================
+Reads normalized_entities.json and builds a NetworkX undirected weighted graph.
+No API calls — pure Python + NetworkX.
 
-Checkpointing: saves progress every 100 chunks to extracted_entities.json.
-Restart-safe: re-running will skip already-processed chunks.
+Nodes: canonical entity strings (appearing in >= MIN_ENTITY_PAPERS papers)
+Edges: co-occurrence within the same paper, weight = number of papers both appear in
+       Only edges with weight >= MIN_EDGE_WEIGHT are kept.
+
+Tune MIN_ENTITY_PAPERS and MIN_EDGE_WEIGHT upward if graph is too large for PyVis.
+
+Output:
+  - graph.pkl       — NetworkX graph via pickle
+  - graph_stats.txt — summary stats
 
 Run:
-  python extract_entities.py
+  python build_graph.py
 """
 
 import os
 import json
+import pickle
+from collections import defaultdict
+from itertools import combinations
+
+import networkx as nx
 import chromadb
-from anthropic import Anthropic
-from rapidfuzz import fuzz
 
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "yakima"
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
-# FUZZY_DEDUP_THRESHOLD: pairs scoring >= this are collapsed to one canonical form.
-# Tune upward (e.g. 92) if over-collapsing, downward (e.g. 82) if under-collapsing.
-FUZZY_DEDUP_THRESHOLD = 88
+NORMALIZED_ENTITIES_PATH = "normalized_entities.json"
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Only include entities mentioned in at least this many papers
+MIN_ENTITY_PAPERS = 10
+# Only include edges where two entities co-occur in at least this many papers
+MIN_EDGE_WEIGHT = 20
+
+# Entities to exclude — category header strings returned by Haiku instead of real entities
+BLACKLIST = {
+    "agencies_and_organizations", "geographic locations", "infrastructure",
+    "species_and_life_stages", "management_actions_and_programs",
+    "Monitoring methods", "monitoring methods", "management actions and programs",
+    "species and life stages",
+}
+
+# Manual normalization overrides — map bad strings to correct canonical form
+# Applied before graph build so edges merge correctly
+MANUAL_NORM = {
+    "Yakirna River": "Yakima River",
+    "Yakirna river": "Yakima River",
+    "yakirna river": "Yakima River",
+    "Adams": "Mount Adams",
+    "adams": "Mount Adams",
+}
+
+CATEGORY_KEYWORDS = {
+    "species": [
+        "trout", "salmon", "bull trout", "smolt", "parr", "redd", "anadromous",
+        "oncorhynchus", "salvelinus", "kokanee", "lamprey", "steelhead", "chinook",
+        "coho", "sockeye", "whitefish", "sculpin", "sucker", "pikeminnow",
+        "juvenile", "adult", "spawner", "fry", "alevin", "fingerling"
+    ],
+    "infrastructure": [
+        "dam", "diversion", "weir", "fish ladder", "trap-and-haul", "spillway",
+        "screen", "culvert", "impoundment", "bypass", "passage",
+        "facility", "structure", "canal", "gate", "turbine"
+    ],
+    "location": [
+        "river", "creek", "lake", "reservoir", "basin", "watershed", "tributary",
+        "reach", "fork", "valley", "canyon", "confluence", "headwater", "mainstem",
+        "stream", "pond", "slough", "wetland", "floodplain", "estuary", "mount", "mountain"
+    ],
+    "management": [
+        "recovery", "restoration", "conservation", "habitat", "reintroduction",
+        "supplementation", "listing", "esa", "hatchery", "stocking", "removal",
+        "treatment", "enhancement", "mitigation", "protection", "plan", "strategy",
+        "program", "project", "initiative", "action", "measure"
+    ],
+    "monitoring": [
+        "pit tag", "acoustic", "telemetry", "radio", "electrofishing",
+        "mark-recapture", "monitoring", "survey", "sampling", "snorkel",
+        "redd count", "escapement", "detection", "antenna", "array",
+        "population estimate", "abundance", "density"
+    ],
+    "agency": [
+        "usfws", "wdfw", "noaa", "nmfs", "bureau of reclamation", "ybfwrb",
+        "yakama", "fish and wildlife", "reclamation", "corps of engineers",
+        "bpa", "bonneville", "epa", "usfs", "forest service", "tribal"
+    ],
+}
 
 
-def get_parent_chunks():
-    """Fetch all documents from ChromaDB, deduplicated by parent_id."""
+def infer_category(entity_name):
+    name_lower = entity_name.lower()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in name_lower:
+                return category
+    return "other"
+
+
+def get_source_map():
     chroma = chromadb.PersistentClient(path=CHROMA_PATH)
     collection = chroma.get_collection(name=COLLECTION_NAME)
     total = collection.count()
     print(f"Total chunks in collection: {total}")
 
-    unique_parents = {}
+    parent_to_source = {}
     batch = 1000
     offset = 0
     fetched = 0
@@ -43,160 +114,151 @@ def get_parent_chunks():
     while fetched < total:
         results = collection.get(
             limit=batch, offset=offset,
-            include=["documents", "metadatas"],
+            include=["metadatas"],
         )
-        docs = results["documents"]
-        if not docs:
-            break
         metas = results["metadatas"]
-        for doc, meta in zip(docs, metas):
+        if not metas:
+            break
+        for meta in metas:
             pid = meta.get("parent_id")
-            if pid and pid not in unique_parents:
-                unique_parents[pid] = doc
-        fetched += len(docs)
+            source = meta.get("source", "")
+            if pid and pid not in parent_to_source and source:
+                parent_to_source[pid] = source
+        fetched += len(metas)
         offset += batch
-        print(f"  Fetched {fetched}/{total} chunks, {len(unique_parents)} unique parents...")
+        if fetched % 10000 == 0:
+            print(f"  Fetched {fetched}/{total} chunks, {len(parent_to_source)} unique parents...")
 
-    print(f"Done: {len(unique_parents)} unique parent chunks.")
-    return unique_parents
-
-
-def extract_one(client, text):
-    """Call Haiku to extract named entities from one parent chunk."""
-    prompt = (
-        "Extract named entities from the following text in these categories:\n"
-        "- geographic locations (rivers, lakes, reservoirs, watersheds)\n"
-        "- infrastructure (dams, diversion structures)\n"
-        "- species and life stages\n"
-        "- management actions and programs\n"
-        "- monitoring methods\n"
-        "- agencies and organizations\n\n"
-        "Return ONLY a JSON list of entity strings, like [\"Entity 1\", \"Entity 2\"].\n"
-        "Do NOT include any explanation, preamble, or markdown code fences.\n\n"
-        f"Text:\n{text[:1000]}"
-    )
-    try:
-        resp = client.messages.create(
-            model=HAIKU_MODEL, max_tokens=200, temperature=0,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = resp.content[0].text.strip()
-        # Strip possible ```json ... ``` block
-        if raw.startswith("```"):
-            lines = raw.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            raw = "\n".join(lines).strip()
-        entities = json.loads(raw)
-        return [str(e) for e in entities if isinstance(e, (str, int, float))]
-    except Exception as e:
-        print(f"    Extraction failed: {e}")
-        return []
+    print(f"Done: {len(parent_to_source)} parent->source mappings.")
+    return parent_to_source
 
 
-def normalize(raw_entities):
-    """Union-find fuzzy dedup using token_sort_ratio >= threshold."""
-    entities = list(raw_entities)
-    n = len(entities)
-    print(f"Fuzzy dedup on {n} unique raw entities (threshold: {FUZZY_DEDUP_THRESHOLD})...")
+def apply_manual_norm(normalized_entities):
+    """Apply manual normalization overrides to entity lists."""
+    result = {}
+    for pid, entities in normalized_entities.items():
+        corrected = []
+        for e in entities:
+            corrected.append(MANUAL_NORM.get(e, e))
+        # Deduplicate after normalization
+        result[pid] = sorted(set(corrected))
+    return result
 
-    parent = list(range(n))
 
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
+def build_graph(normalized_entities, parent_to_source):
+    source_to_entities = defaultdict(set)
+    entity_to_sources = defaultdict(set)
 
-    def union(i, j):
-        pi, pj = find(i), find(j)
-        if pi != pj:
-            if len(entities[pi]) >= len(entities[pj]):
-                parent[pj] = pi
-            else:
-                parent[pi] = pj
+    for pid, entities in normalized_entities.items():
+        source = parent_to_source.get(pid)
+        if not source:
+            continue
+        for entity in entities:
+            source_to_entities[source].add(entity)
+            entity_to_sources[entity].add(source)
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if find(i) != find(j):
-                if fuzz.token_sort_ratio(entities[i], entities[j]) >= FUZZY_DEDUP_THRESHOLD:
-                    union(i, j)
+    print(f"Papers with entities: {len(source_to_entities)}")
+    print(f"Unique entities before filtering: {len(entity_to_sources)}")
 
-    groups = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(entities[i])
+    # Remove blacklisted entities
+    entity_to_sources = {
+        e: s for e, s in entity_to_sources.items()
+        if e not in BLACKLIST
+    }
 
-    norm_map = {}
-    for members in groups.values():
-        canonical = max(members, key=len)
-        for m in members:
-            norm_map[m] = canonical
+    # Filter to entities appearing in at least MIN_ENTITY_PAPERS papers
+    entity_to_sources = {
+        e: s for e, s in entity_to_sources.items()
+        if len(s) >= MIN_ENTITY_PAPERS
+    }
+    print(f"Unique entities after filtering (min {MIN_ENTITY_PAPERS} papers, blacklist removed): {len(entity_to_sources)}")
 
-    collapsed = n - len(set(norm_map.values()))
-    print(f"Done: {n} raw → {len(set(norm_map.values()))} canonical ({collapsed} collapsed).")
-    return norm_map
+    kept_entities = set(entity_to_sources.keys())
+    source_to_entities = {
+        source: entities & kept_entities
+        for source, entities in source_to_entities.items()
+    }
+    source_to_entities = {s: e for s, e in source_to_entities.items() if len(e) >= 2}
+
+    G = nx.Graph()
+
+    for entity, sources in entity_to_sources.items():
+        G.add_node(entity, papers=sorted(sources), category=infer_category(entity))
+
+    print(f"Building edges from co-occurrences (min weight={MIN_EDGE_WEIGHT})...")
+    edge_weights = defaultdict(int)
+    for source, entities in source_to_entities.items():
+        entity_list = sorted(entities)
+        for e1, e2 in combinations(entity_list, 2):
+            key = (min(e1, e2), max(e1, e2))
+            edge_weights[key] += 1
+
+    edge_weights = {k: v for k, v in edge_weights.items() if v >= MIN_EDGE_WEIGHT}
+    print(f"  {len(edge_weights)} edges after filtering.")
+
+    for (e1, e2), weight in edge_weights.items():
+        G.add_edge(e1, e2, weight=weight)
+
+    isolated = list(nx.isolates(G))
+    G.remove_nodes_from(isolated)
+    print(f"  Removed {len(isolated)} isolated nodes.")
+
+    return G
+
+
+def write_stats(G):
+    lines = []
+    lines.append(f"Total nodes: {G.number_of_nodes()}")
+    lines.append(f"Total edges: {G.number_of_edges()}")
+    lines.append("")
+
+    edges_sorted = sorted(G.edges(data=True), key=lambda x: x[2].get("weight", 0), reverse=True)
+    lines.append("Top 10 highest-weight edges (most co-occurring pairs):")
+    for e1, e2, data in edges_sorted[:10]:
+        lines.append(f"  {e1!r} <-> {e2!r}  weight={data.get('weight', 0)}")
+    lines.append("")
+
+    degree_sorted = sorted(G.degree(), key=lambda x: x[1], reverse=True)
+    lines.append("Top 10 most connected nodes:")
+    for node, degree in degree_sorted[:10]:
+        cat = G.nodes[node].get("category", "other")
+        npap = len(G.nodes[node].get("papers", []))
+        lines.append(f"  {node!r}  degree={degree}  category={cat}  papers={npap}")
+
+    stats_text = "\n".join(lines)
+    with open("graph_stats.txt", "w", encoding="utf-8") as f:
+        f.write(stats_text)
+    print("\n--- Graph Stats ---")
+    print(stats_text)
 
 
 def main():
-    if not ANTHROPIC_API_KEY:
-        print("ERROR: ANTHROPIC_API_KEY not set in environment.")
+    if not os.path.exists(NORMALIZED_ENTITIES_PATH):
+        print(f"ERROR: {NORMALIZED_ENTITIES_PATH} not found. Run extract_entities.py first.")
         return
 
-    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    print(f"Loading {NORMALIZED_ENTITIES_PATH}...")
+    with open(NORMALIZED_ENTITIES_PATH, "r", encoding="utf-8") as f:
+        normalized_entities = json.load(f)
+    print(f"Loaded {len(normalized_entities)} parent chunks with entities.")
 
-    # Load checkpoint if exists
-    checkpoint_path = "extracted_entities.json"
-    if os.path.exists(checkpoint_path):
-        with open(checkpoint_path, "r", encoding="utf-8") as f:
-            extracted = json.load(f)
-        print(f"Resuming from checkpoint: {len(extracted)} already processed.")
-    else:
-        extracted = {}
+    # Apply manual normalization fixes before building graph
+    print("Applying manual normalization overrides...")
+    normalized_entities = apply_manual_norm(normalized_entities)
 
-    # Step 1: Extract
-    parents = get_parent_chunks()
-    already_done = set(extracted.keys())
-    remaining = {pid: text for pid, text in parents.items() if pid not in already_done}
-    print(f"{len(remaining)} remaining to process ({len(already_done)} already done).")
+    parent_to_source = get_source_map()
 
-    for i, (pid, text) in enumerate(remaining.items(), 1):
-        print(f"[{i}/{len(remaining)}] {pid[:80]}...")
-        entities = extract_one(client, text)
-        if entities:
-            extracted[pid] = entities
+    print("\nBuilding graph...")
+    G = build_graph(normalized_entities, parent_to_source)
+    print(f"Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges.")
 
-        # Save checkpoint every 100 chunks
-        if i % 100 == 0:
-            with open(checkpoint_path, "w", encoding="utf-8") as f:
-                json.dump(extracted, f, indent=2)
-            print(f"  Checkpoint saved ({len(extracted)} total).")
+    with open("graph.pkl", "wb") as f:
+        pickle.dump(G, f)
+    print("Graph saved -> graph.pkl")
 
-    # Final save
-    with open(checkpoint_path, "w", encoding="utf-8") as f:
-        json.dump(extracted, f, indent=2)
-    print(f"Raw entities saved ({len(extracted)} total) → extracted_entities.json")
-
-    # Step 2: Normalize
-    all_raw = set()
-    for ents in extracted.values():
-        all_raw.update(ents)
-    print(f"\n{len(all_raw)} unique raw entity strings.")
-
-    norm_map = normalize(all_raw)
-
-    with open("normalization_map.json", "w", encoding="utf-8") as f:
-        json.dump(norm_map, f, indent=2, ensure_ascii=False)
-
-    normalized = {}
-    for pid, ents in extracted.items():
-        normalized[pid] = sorted(set(norm_map.get(e, e) for e in ents))
-
-    with open("normalized_entities.json", "w", encoding="utf-8") as f:
-        json.dump(normalized, f, indent=2, ensure_ascii=False)
-    print(f"Normalized entities saved → normalized_entities.json")
-    print("Phase 1 complete.")
+    write_stats(G)
+    print("Stats saved -> graph_stats.txt")
+    print("\nPhase 2 complete.")
 
 
 if __name__ == "__main__":

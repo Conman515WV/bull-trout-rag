@@ -5,6 +5,9 @@ Queries ChromaDB directly (no PDF reads), extracts named entities via Haiku
 per parent chunk, then runs fuzzy normalization across all raw entities using
 rapidfuzz token_sort_ratio (threshold = 88).
 
+Checkpointing: saves progress every 100 chunks to extracted_entities.json.
+Restart-safe: re-running will skip already-processed chunks.
+
 Run:
   python extract_entities.py
 """
@@ -17,7 +20,7 @@ from rapidfuzz import fuzz
 
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "yakima"
-HAIKU_MODEL = "claude-haiku-4-5"
+HAIKU_MODEL = "claude-haiku-4-5-20251001"
 # FUZZY_DEDUP_THRESHOLD: pairs scoring >= this are collapsed to one canonical form.
 # Tune upward (e.g. 92) if over-collapsing, downward (e.g. 82) if under-collapsing.
 FUZZY_DEDUP_THRESHOLD = 88
@@ -49,7 +52,7 @@ def get_parent_chunks():
         for doc, meta in zip(docs, metas):
             pid = meta.get("parent_id")
             if pid and pid not in unique_parents:
-                unique_parents[pid] = doc  # doc text keyed by parent_id
+                unique_parents[pid] = doc
         fetched += len(docs)
         offset += batch
         print(f"  Fetched {fetched}/{total} chunks, {len(unique_parents)} unique parents...")
@@ -70,7 +73,7 @@ def extract_one(client, text):
         "- agencies and organizations\n\n"
         "Return ONLY a JSON list of entity strings, like [\"Entity 1\", \"Entity 2\"].\n"
         "Do NOT include any explanation, preamble, or markdown code fences.\n\n"
-        f"Text:\n{text[:3000]}"
+        f"Text:\n{text[:1000]}"
     )
     try:
         resp = client.messages.create(
@@ -143,18 +146,37 @@ def main():
 
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
+    # Load checkpoint if exists
+    checkpoint_path = "extracted_entities.json"
+    if os.path.exists(checkpoint_path):
+        with open(checkpoint_path, "r", encoding="utf-8") as f:
+            extracted = json.load(f)
+        print(f"Resuming from checkpoint: {len(extracted)} already processed.")
+    else:
+        extracted = {}
+
     # Step 1: Extract
     parents = get_parent_chunks()
-    extracted = {}
-    for i, (pid, text) in enumerate(parents.items(), 1):
-        print(f"[{i}/{len(parents)}] {pid[:80]}...")
+    already_done = set(extracted.keys())
+    remaining = {pid: text for pid, text in parents.items() if pid not in already_done}
+    print(f"{len(remaining)} remaining to process ({len(already_done)} already done).")
+
+    for i, (pid, text) in enumerate(remaining.items(), 1):
+        print(f"[{i}/{len(remaining)}] {pid[:80]}...")
         entities = extract_one(client, text)
         if entities:
             extracted[pid] = entities
 
-    with open("extracted_entities.json", "w", encoding="utf-8") as f:
+        # Save checkpoint every 100 chunks
+        if i % 100 == 0:
+            with open(checkpoint_path, "w", encoding="utf-8") as f:
+                json.dump(extracted, f, indent=2)
+            print(f"  Checkpoint saved ({len(extracted)} total).")
+
+    # Final save
+    with open(checkpoint_path, "w", encoding="utf-8") as f:
         json.dump(extracted, f, indent=2)
-    print(f"Raw entities saved (extracted_entities.json)")
+    print(f"Raw entities saved ({len(extracted)} total) → extracted_entities.json")
 
     # Step 2: Normalize
     all_raw = set()
@@ -173,7 +195,7 @@ def main():
 
     with open("normalized_entities.json", "w", encoding="utf-8") as f:
         json.dump(normalized, f, indent=2, ensure_ascii=False)
-    print(f"Normalized entities saved (normalized_entities.json)")
+    print(f"Normalized entities saved → normalized_entities.json")
     print("Phase 1 complete.")
 
 
