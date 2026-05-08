@@ -811,16 +811,7 @@ def main():
     if not check_password():
         return
 
-    # ── Page Navigation ─────────────────────────────────────────────────
-    page = st.sidebar.radio("Navigate", ["💬 Chat", "🔗 Graph Explorer"], index=0, label_visibility="collapsed")
-
-    if "Graph" in page:
-        from graph_page import run as run_graph
-        st.session_state["page"] = "graph"
-        run_graph()
-    else:
-        st.session_state["page"] = "chat"
-        chat_page(client, collection, embed_model, bm25, bm25_texts, bm25_meta, reranker)
+    chat_page(client, collection, embed_model, bm25, bm25_texts, bm25_meta, reranker)
 
 
 if __name__ == "__main__":
