@@ -757,7 +757,7 @@ def chat_page(client, collection, embed_model, bm25, bm25_texts, bm25_meta, rera
         if not st.session_state.messages:
             st.markdown(
                 '<p style="color:#999999;font-size:0.85rem;text-align:center;margin-top:2rem;">'
-                'Connor Cunningham 2026'
+                '<a href="https://conman515.github.io/ConnorCunningham_CV/" style="color:#999999;text-decoration:none;">Connor Cunningham 2026</a>'
                 '</p>',
                 unsafe_allow_html=True,
             )
